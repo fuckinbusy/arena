@@ -362,28 +362,28 @@ static inline Arena arena_create_ex(ArenaConfig config)
     if (config.base_alignment == 0) config.base_alignment = ARENA_ALIGN_DEFAULT;
 
     size_t page_size  = _arena_get_platform_page_size();
-    config.capacity = _arena_align_up(config.capacity, config.base_alignment); // aligning capacity to arena base alignment
+    config.capacity   = _arena_align_up(config.capacity, config.base_alignment); // aligning capacity to arena base alignment
 
     // resolve contract
     switch (config.growth_contract) {
         case ARENA_GROWTH_CONTRACT_LINEAR: {
-            config.growth_factor = ARENA_GROWTH_FACTOR_LINEAR;
-            config.max_capacity  = ARENA_CAPACITY_MAX;
+            config.growth_factor = config.growth_factor ? config.growth_factor : ARENA_GROWTH_FACTOR_LINEAR;
+            config.max_capacity  = config.max_capacity ? config.max_capacity : ARENA_CAPACITY_MAX;
         } break;
 
         case ARENA_GROWTH_CONTRACT_EXPONENTIAL: {
-            config.growth_factor = ARENA_GROWTH_FACTOR_EXPONENTIAL;
-            config.max_capacity  = ARENA_CAPACITY_MAX;
+            config.growth_factor = config.growth_factor ? config.growth_factor : ARENA_GROWTH_FACTOR_EXPONENTIAL;
+            config.max_capacity  = config.max_capacity ? config.max_capacity : ARENA_CAPACITY_MAX;
         } break;
 
         case ARENA_GROWTH_CONTRACT_PAGE: {
-            config.growth_factor = page_size;
-            config.max_capacity  = ARENA_CAPACITY_MAX;
+            config.growth_factor = page_size; // ignoring config value on purpose
+            config.max_capacity  = config.max_capacity ? config.max_capacity : ARENA_CAPACITY_MAX;
         } break;
 
         default: {
             config.growth_factor = ARENA_GROWTH_FACTOR_NONE;
-            config.max_capacity  = config.capacity;
+            config.max_capacity  = config.max_capacity ? config.max_capacity : config.capacity;
         } break;
     }
 
@@ -401,7 +401,7 @@ static inline Arena arena_create_ex(ArenaConfig config)
     void *mem = _arena_alloc_arena(alloc_size, alloc_type);
     if (!mem) return ARENA_EMPTY;
 
-    if (config.flags & ARENA_FLAG_FILLZEROES) memset(mem, 0, alloc_size);
+    if (config.flags & ARENA_FLAG_FILLZEROES) arena_memset(mem, 0, alloc_size);
     
     return (Arena){
         .base            = (uint8_t*)mem,
@@ -432,8 +432,8 @@ static inline ArenaConfig arena_config_create(arena_size_t capacity, arena_size_
 inline Arena arena_create(size_t capacity)
 {
     return arena_create_ex((ArenaConfig){
-        .base_alignment  = capacity, 
-        .capacity        = ARENA_CAPACITY_CHOOSE_FOR_ME_PLS,
+        .base_alignment  = ARENA_ALIGN_DEFAULT, 
+        .capacity        = capacity,
         .flags           = ARENA_FLAG_DEBUG,
         .growth_contract = ARENA_GROWTH_CONTRACT_FIXED,
         .growth_factor   = ARENA_GROWTH_FACTOR_NONE,
@@ -487,7 +487,7 @@ static inline void *arena_alloc(Arena *arena, arena_size_t size, size_t alignmen
 
     if (new_offset > arena->capacity) return NULL;
 
-    arena_size_t alloc_size  = new_offset - arena->offset;
+    arena_size_t alloc_size = new_offset - arena->offset;
 
     ARENA_LOG(
         "arena_alloc--->\n"
@@ -529,7 +529,7 @@ static inline void *arena_alloc_zero(Arena *arena, arena_size_t size, size_t ali
 {
     ARENA_LOG("Arena `arena_alloc_zero` called.");
     void *p = arena_alloc(arena, size, alignment); // params will be checked here so dont need
-    if (p) memset(p, 0, size);
+    if (p) arena_memset(p, 0, size);
     return p;
 }
 
@@ -589,10 +589,10 @@ static inline size_t _arena_calc_new_alloc_size(Arena *arena, arena_size_t requi
 static inline bool arena_grow(Arena *arena, arena_size_t required_size)
 {
     if (!arena || arena->capacity == 0 || arena->growth_contract == ARENA_GROWTH_CONTRACT_FIXED) return false;
-    if (arena->capacity >= arena->max_capacity || arena->capacity > required_size) return false;
+    if (arena->capacity >= arena->max_capacity || arena->capacity > required_size || required_size > arena->max_capacity) return false;
     
     size_t alloc_size = _arena_calc_new_alloc_size(arena, required_size);
-    if (alloc_size == 0 || alloc_size < arena->capacity) return false; // explicit assert for growing
+    if (alloc_size == 0 || alloc_size < arena->capacity || alloc_size > arena->max_capacity) return false; // explicit assert for growing
 
     void *new_base = NULL;
     void *old_base = arena->base;
@@ -720,7 +720,7 @@ static inline void *arena_memset(void *dst, int value, size_t size)
     uint8_t *p8 = (uint8_t*)dst;
     
     if (word) {
-        size_t offset = (uintptr_t)dst & ~(-word);
+        size_t offset = (uintptr_t)dst & (word-1);
         
         if (offset) {
             size_t align = word - offset;
