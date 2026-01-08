@@ -712,17 +712,17 @@ static inline void *arena_memset(void *dst, int value, size_t size)
     if (!dst || size == 0) return NULL;
 
     int word = 0;
-    uint64_t __pattern64 = (uint8_t)value;
+    uint64_t pattern64 = (uint8_t)value;
     
     if (size >= 0x10000) {
         word = 8;
-        __pattern64 |= (__pattern64 << 8);
-        __pattern64 |= (__pattern64 << 16);
-        __pattern64 |= (__pattern64 << 32);
+        pattern64 |= (pattern64 << 8);
+        pattern64 |= (pattern64 << 16);
+        pattern64 |= (pattern64 << 32);
     } else if (size >= 0x4000) {
         word = 4;
-        __pattern64 |= (__pattern64 << 8);
-        __pattern64 |= (__pattern64 << 16);
+        pattern64 |= (pattern64 << 8);
+        pattern64 |= (pattern64 << 16);
     }
 
     uint8_t *p8 = (uint8_t*)dst;
@@ -740,10 +740,10 @@ static inline void *arena_memset(void *dst, int value, size_t size)
         if (word == 4) {
             uint32_t *p32 = (uint32_t*)p8;
             size_t blocks  = size / word;
-            uint32_t __pattern32 = (uint32_t)__pattern64;
+            uint32_t pattern32 = (uint32_t)pattern64;
 
             while (blocks--) {
-                *p32++ = __pattern32;
+                *p32++ = pattern32;
             }
 
             p8 = (uint8_t*)p32;
@@ -753,7 +753,7 @@ static inline void *arena_memset(void *dst, int value, size_t size)
              size_t blocks = size / word;
 
             while (blocks--) {
-                *p64++ = __pattern64;
+                *p64++ = pattern64;
             }
 
             p8 = (uint8_t*)p64;
