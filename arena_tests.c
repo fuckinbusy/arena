@@ -231,4 +231,5 @@ int main(void)
     TEST_RUN(test_arena_reset);
     TEST_RUN(test_arena_grow_linear);
     TEST_RUN(test_arena_stress);
+    return 0;
 }
