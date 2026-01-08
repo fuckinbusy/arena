@@ -23,59 +23,71 @@
 #define ARENA_H_
 
 #include <stdbool.h>
+#include <stdlib.h>
+#include <stdalign.h>
+
 #include <stdint.h>
 typedef uint64_t  arena_size_t;
 #define ARENA_SIZE_FMT "%llu"
 typedef uintptr_t arena_ptr_t;
-#include <stdalign.h>
-// #include <string.h>
 
-#define ARENA_PLATFORM_LIBC  0x0
-#define ARENA_PLATFORM_WIN32 0x2
-#define ARENA_PLATFORM_WIN64 0x4
-#define ARENA_PLATFORM_UNIX  0x8
+#define _ARENA_PLATFORM_LIBC  0x0
+#define _ARENA_PLATFORM_WIN32 0x2
+#define _ARENA_PLATFORM_WIN64 0x4
+#define _ARENA_PLATFORM_UNIX  0x8
+
+#ifdef __GNUC__
+    #define _ARENA_FORCE_INLINE   __attribute__((always_inline))
+    #define _ARENA_PREFETCH(addr) __builtin_prefetch((addr))
+#else
+    #define _ARENA_FORCE_INLINE static inline
+    #define _ARENA_PREFETCH(...)
+#endif
 
 #ifndef ARENA_PLATFORM
     #if defined(_WIN32)
-        #define ARENA_PLATFORM ARENA_PLATFORM_WIN32
+        #define ARENA_PLATFORM _ARENA_PLATFORM_WIN32
     #elif defined(_WIN64)
-        #define ARENA_PLATFORM ARENA_PLATFORM_WIN64
+        #define ARENA_PLATFORM _ARENA_PLATFORM_WIN64
     #elif defined(__unix__) || defined(__linux__)
-        #define ARENA_PLATFORM ARENA_PLATFORM_UNIX
+        #define ARENA_PLATFORM _ARENA_PLATFORM_UNIX
     #else
-        #define ARENA_PLATFORM ARENA_PLATFORM_LIBC
+        #define ARENA_PLATFORM _ARENA_PLATFORM_LIBC
     #endif
 #endif 
 
-#if (ARENA_PLATFORM == ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == ARENA_PLATFORM_WIN64)
+#if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
     #define WIN32_LEAN_AND_MEAN
+    #define NOGDI
     #define NOMINMAX
+    #define NOUSER
+    #define NOSERVICE
+    #define NOMCX
+    #define NOSOUND
+    #define NOCOMM
+    #define NORPC
     #include <windows.h>
-    #define ARENA_INVALID_HANDLE(h) (((h) == NULL) || ((h) == INVALID_HANDLE_VALUE))
-#elif ARENA_PLATFORM == ARENA_PLATFORM_LIBC
-    #include <stdlib.h>
-#elif ARENA_PLATFORM == ARENA_PLATFORM_UNIX
+#elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
     #include <unistd.h>
     #include <sys/mman.h>
 #else
     error("Undefined platform")
 #endif
 
-#define ARENA_INVALID_PTR(p) (((p) == NULL))
-
 #ifndef ARENA_NOMINAX
-    #define ARENA_MAX(a, b) (((a) > (b)) ? (a) : (b))
-    #define ARENA_MIN(a, b) (((a) < (b)) ? (a) : (b))
+    #define ARENA_MAX(a, b) ((a) - (((a) - (b)) & (((a) - (b)) >> 31))) // damn
+    #define ARENA_MIN(a, b) ((b) + (((a) - (b)) & (((a) - (b)) >> 31)))
 #endif
 
 #define ARENA_U64_MAX  0xffffffffffffffffull
 #define ARENA_U32_MAX  0xffffffffu
 #define ARENA_SIZE_MAX SIZE_MAX
+#define ARENA_PTR_MAX  MAXINT_PTR
 
-#define ARENA_POISON_ALLOC         0xCD   // arena memory poisoning value after allocating memory from arena
-#define ARENA_POISON_RESET         0xDD   // arena memory poisoning value after resetting arena
-#define ARENA_PAGE_ALIGN_THRESHOLD 0x2000 // used to identify when to switch to platform specific allocation 
-#define ARENA_PAGE_DEFAULT_SIZE    0x1000 // for libc universal platform 
+#define _ARENA_POISON_ALLOC         0xCD   // arena memory poisoning value after allocating memory from arena
+#define _ARENA_POISON_RESET         0xDD   // arena memory poisoning value after resetting arena
+#define ARENA_PAGE_ALIGN_THRESHOLD 0x2000  // used to identify when to switch to platform specific allocation 
+#define ARENA_PAGE_DEFAULT_SIZE    0x1000  // for libc universal platform 
 
 typedef enum ArenaGrowthContract {
     ARENA_GROWTH_CONTRACT_FIXED       = 0,
@@ -182,10 +194,10 @@ static inline const char *arena_capacity_str(size_t capacity)
 static inline const char *arena_platform_str()
 {
     switch (ARENA_PLATFORM) {
-        case ARENA_PLATFORM_WIN32: return "WIN32";
-        case ARENA_PLATFORM_WIN64: return "WIN64";
-        case ARENA_PLATFORM_UNIX:  return "UNIX";
-        case ARENA_PLATFORM_LIBC:  return "LIBC";
+        case _ARENA_PLATFORM_WIN32: return "WIN32";
+        case _ARENA_PLATFORM_WIN64: return "WIN64";
+        case _ARENA_PLATFORM_UNIX:  return "UNIX";
+        case _ARENA_PLATFORM_LIBC:  return "LIBC";
         default:                   return "UNKNOWN";
     }
 }
@@ -240,12 +252,24 @@ static inline void *arena_alloc_zero(Arena *arena, arena_size_t size, size_t ali
 static inline void arena_reset(Arena *arena);
 static inline bool arena_grow(Arena *arena, arena_size_t grow_size);
 static inline bool arena_set_growth_contract(Arena *arena, ArenaGrowthContract contract, size_t growth_factor);
-static inline void *arena_memcpy(void *dst, const void *src, size_t count);
+
 static inline bool arena_memcpy_within(Arena *arena, void *dst, const void *src, size_t count);
-static inline void *arena_memset(void *dst, int value, size_t size);
 static inline void *arena_memset_within(Arena *arena, void *dst, int value, size_t count);
-static inline char *arena_strdup(Arena *arena, const char *src);
-static inline size_t arena_strlen(const char *str);
+static inline long long arena_abs(long long value);
+
+#ifdef ARENA_USE_STD_STRING // if defined <string.h> functions will be used
+    #include <string.h>
+    #define arena_memcpy memcpy
+    #define arena_memset memset
+    #define arena_strdup strdup
+    #define arena_strlen strlen
+#else
+    static inline void *arena_memcpy(void *dst, const void *src, size_t count);
+    static inline void *arena_memset(void *dst, int value, size_t size);
+    static inline char *arena_strdup(Arena *arena, const char *src);
+    static inline size_t arena_strlen(const char *str);
+    static inline size_t arena_strlen_fast(const char *str);
+#endif
 
 #define ARENA_IMPLEMENTATION
 #ifdef ARENA_IMPLEMENTATION
@@ -258,33 +282,33 @@ static inline size_t arena_strlen(const char *str);
     #define ARENA_LOG(...)
 #endif
 
-static inline arena_size_t _arena_sadd(arena_size_t a, arena_size_t b, arena_size_t max)
+_ARENA_FORCE_INLINE arena_size_t _arena_sadd(arena_size_t a, arena_size_t b, arena_size_t max)
 {
     return (a > (max - b)) ? max : (a + b);
 }
 
-static inline arena_size_t _arena_smul(arena_size_t a, arena_size_t b, arena_size_t max)
+_ARENA_FORCE_INLINE arena_size_t _arena_smul(arena_size_t a, arena_size_t b, arena_size_t max)
 {
     return (a > (max / b)) ? max : (a * b);
 }
 
-static inline bool _arena_is_pow2(size_t value)
+_ARENA_FORCE_INLINE bool _arena_is_pow2(size_t value)
 {
     return ((value > 0) && ((value & (value - 1)) == 0));
 }
 
-static inline bool _arena_is_aligned_to(arena_size_t value, size_t alignment)
+_ARENA_FORCE_INLINE bool _arena_is_aligned_to(arena_size_t value, size_t alignment)
 {
     return (alignment > 0) && ((value % alignment) == 0);
 }
 
-static inline arena_size_t _arena_align_up(arena_size_t value, size_t alignment)
+_ARENA_FORCE_INLINE arena_size_t _arena_align_up(arena_size_t value, size_t alignment)
 {
     if (alignment == 0) return value; // prevents from very dangerous UB
     return (_arena_sadd(value, alignment - 1, ARENA_U64_MAX)) & ~(alignment - 1);
 }
 
-static inline size_t _arena_downcast_size(arena_size_t value, bool *overflow)
+_ARENA_FORCE_INLINE size_t _arena_downcast_size(arena_size_t value, bool *overflow)
 {
     if (overflow) *overflow = false;
 
@@ -299,15 +323,15 @@ static inline size_t _arena_downcast_size(arena_size_t value, bool *overflow)
     return (size_t)value;
 }
 
-static inline size_t _arena_get_platform_page_size()
+_ARENA_FORCE_INLINE size_t _arena_get_platform_page_size()
 {
-    #if (ARENA_PLATFORM == ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == ARENA_PLATFORM_WIN64)
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
 
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return si.dwPageSize;
     
-    #elif ARENA_PLATFORM == ARENA_PLATFORM_UNIX
+    #elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
     
     long ps = sysconf(_SC_PAGESIZE);
     return ps > 0 ? (size_t)ps : ARENA_PAGE_DEFAULT_SIZE;
@@ -319,13 +343,13 @@ static inline size_t _arena_get_platform_page_size()
     #endif
 }
 
-static inline void *_arena_alloc_arena(size_t alloc_size, uint32_t alloc_type)
+_ARENA_FORCE_INLINE void *_arena_alloc_arena(size_t alloc_size, uint32_t alloc_type)
 {
     void *mem = NULL;
     size_t page_size = _arena_get_platform_page_size();
 
     if (alloc_type == ARENA_ALLOC_TYPE_BIG) {
-    #if ARENA_PLATFORM == ARENA_PLATFORM_UNIX
+    #if ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
         alloc_size = _arena_align_up(alloc_size, page_size);
         mem = mmap(
             NULL, 
@@ -336,10 +360,10 @@ static inline void *_arena_alloc_arena(size_t alloc_size, uint32_t alloc_type)
         );
         if (mem == MAP_FAILED) mem = NULL;
         ARENA_LOG("Arena created. Memory allocated with `nmap` as %d bytes sized pages. Platform: %s Size: %zu", page_size, arena_platform_str(), alloc_size);
-    #elif (ARENA_PLATFORM == ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == ARENA_PLATFORM_WIN64)
+    #elif (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
         mem = VirtualAlloc(NULL, alloc_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         ARENA_LOG("Arena created. Memory allocated with `VirtualAlloc` as %d bytes sized pages. Platform: %s Size: %zu", page_size, arena_platform_str(), alloc_size);
-    #elif ARENA_PLATFORM == ARENA_PLATFORM_LIBC
+    #elif ARENA_PLATFORM == _ARENA_PLATFORM_LIBC
         alloc_size = _arena_align_up(alloc_size, page_size);
         mem = malloc(alloc_size);
         ARENA_LOG("Arena created. Memory allocated with `malloc` as %d bytes sized pages. Platform: %s Size: %zu", page_size, arena_platform_str(), alloc_size);
@@ -429,7 +453,7 @@ static inline ArenaConfig arena_config_create(arena_size_t capacity, arena_size_
     };
 }
 
-inline Arena arena_create(size_t capacity)
+static inline Arena arena_create(size_t capacity)
 {
     return arena_create_ex((ArenaConfig){
         .base_alignment  = ARENA_ALIGN_DEFAULT, 
@@ -446,11 +470,11 @@ static inline void arena_destroy(Arena *arena)
     if (!arena || !arena->base) return;
 
     if (arena->alloc_type == ARENA_ALLOC_TYPE_BIG) {
-    #if (ARENA_PLATFORM == ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == ARENA_PLATFORM_WIN64)
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
         VirtualFree(arena->base, 0, MEM_RELEASE);
-    #elif ARENA_PLATFORM == ARENA_PLATFORM_UNIX
+    #elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
         munmap(arena->base, arena->capacity);
-    #elif ARENA_PLATFORM == ARENA_PLATFORM_LIBC
+    #elif ARENA_PLATFORM == _ARENA_PLATFORM_LIBC
         free(arena->base);
     #endif
     } else {
@@ -598,13 +622,13 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_size)
     void *old_base = arena->base;
     
     if (arena->alloc_type == ARENA_ALLOC_TYPE_BIG) {
-    #if (ARENA_PLATFORM == ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == ARENA_PLATFORM_WIN64)   
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)   
         new_base = VirtualAlloc(NULL, alloc_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         if (new_base) {
             memcpy_s(new_base, alloc_size, old_base, arena->capacity);
             VirtualFree(old_base, arena->capacity, MEM_RELEASE);
         }
-    #elif ARENA_PLATFORM == ARENA_PLATFORM_UNIX
+    #elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
         new_base = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
         if (new_base != MAP_FAILED) {
@@ -612,7 +636,7 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_size)
         } else { new_base = NULL; }
         
         munmap(old_base, arena->capacity);
-    #elif ARENA_PLATFORM == ARENA_PLATFORM_LIBC
+    #elif ARENA_PLATFORM == _ARENA_PLATFORM_LIBC
         new_base = realloc(old_base, alloc_size);
     #endif
     } else {
@@ -663,39 +687,23 @@ static inline void arena_reset(Arena *arena)
 {
     if (arena && arena->base && arena->capacity > 0) {
         arena->offset = 0;
-        // memset(arena->base, ARENA_POISON_RESET, arena->capacity);
+        // memset(arena->base, _ARENA_POISON_RESET, arena->capacity);
         ARENA_LOG("Arena reset");
     }
 }
 
+#ifndef ARENA_USE_STD_STRING
 static inline void *arena_memcpy(void *dst, const void *src, size_t count)
 {
-    uint8_t *o = (uint8_t*)dst; // this is o
-    uint8_t *i = (uint8_t*)src; // this is i
-
-    while (count--) {
-        *o++ = *i++;
+    while (count >= 8) { // type cast ol trick
+        *(uint64_t*)dst = *(uint64_t*)src;
+        dst += 8; src += 8;
+        count -= 8;
     }
+
+    while (count--) *(uint8_t*)dst++ = *(uint8_t*)src++;
     
     return dst;
-}
-
-static inline bool arena_memcpy_within(Arena *arena, void *dst, const void *src, size_t count)
-{
-    if (!dst || !src || count == 0) return false;
-
-    arena_ptr_t dst_start   = (arena_ptr_t)dst;
-    arena_ptr_t dst_end     = dst_start + count;
-    arena_ptr_t src_start   = (arena_ptr_t)src;
-    arena_ptr_t src_end     = src_start + count;
-    arena_ptr_t arena_start = (arena_ptr_t)arena->base;
-    arena_ptr_t arena_end   = arena_start + arena->offset;
-
-    if (dst_start < arena_start || dst_end > arena_end || src_start < arena_start || src_end > arena_end) return false;
-
-    arena_memcpy(dst, src, count);
-
-    return true;
 }
 
 static inline void *arena_memset(void *dst, int value, size_t size)
@@ -764,6 +772,67 @@ static inline void *arena_memset(void *dst, int value, size_t size)
     return dst;
 }
 
+static inline char *arena_strdup(Arena *arena, const char *src)
+{
+    if (!arena || arena->capacity == 0 || !src) return NULL;
+    void *dst = arena_alloc(arena, arena_strlen(src)+1, alignof(char));
+    if (dst) arena_memcpy(dst, src, arena_strlen(src)+1);
+    return dst;
+}
+
+static inline size_t arena_strlen(const char *str) // USA international debt growth simulator
+{
+    size_t usa_international_debt = 0;
+    while (str++) {
+        usa_international_debt++;
+    }
+    return usa_international_debt;
+}
+
+#define _ARENA_HAS_ZERO_BYTE(v) (((v) - 0x0101010101010101u) & ~(v) & 0x8080808080808080u)
+// 1 nanosec faster on O0, O1 and O2 than arena_strlen (still slower than libc strlen)
+static inline size_t arena_strlen_fast(const char *str)
+{
+    const char *p = str;
+    while ((arena_ptr_t)p & 7) {
+        if (*p == 0) return p - str;
+        p++;
+    }
+
+    const uint64_t *word = (uint64_t*)p;
+    while (1) {
+        uint64_t value = *word;
+        if (_ARENA_HAS_ZERO_BYTE(value)) break;
+        word++;
+    }
+
+    const char *byte = (const char*)word;
+    for (char i = 0; i < 8; ++i) {
+        if (byte[i] == 0) return (byte + i) - str;
+    }
+
+    return 0; // should be unreachable actually
+}
+#endif
+
+static inline bool arena_memcpy_within(Arena *arena, void *dst, const void *src, size_t count)
+{
+    if (!dst || !src || count == 0) return false;
+
+    arena_ptr_t dst_start   = (arena_ptr_t)dst;
+    arena_ptr_t dst_end     = dst_start + count;
+    arena_ptr_t src_start   = (arena_ptr_t)src;
+    arena_ptr_t src_end     = src_start + count;
+    arena_ptr_t arena_start = (arena_ptr_t)arena->base;
+    arena_ptr_t arena_end   = arena_start + arena->offset;
+
+    if (dst_start < arena_start || dst_end > arena_end || src_start < arena_start || src_end > arena_end) return false;
+
+    arena_memcpy(dst, src, count);
+
+    return true;
+}
+
 static inline void *arena_memset_within(Arena *arena, void *dst, int value, size_t count)
 {
     if (!arena || arena->capacity == 0) return NULL;
@@ -779,21 +848,9 @@ static inline void *arena_memset_within(Arena *arena, void *dst, int value, size
     return arena_memset(dst, value, count);
 }
 
-static inline char *arena_strdup(Arena *arena, const char *src)
+static inline long long arena_abs(long long value)
 {
-    if (!arena || arena->capacity == 0 || !src) return NULL;
-    void *dst = arena_alloc(arena, arena_strlen(src)+1, alignof(char));
-    if (dst) arena_memcpy(dst, src, arena_strlen(src)+1);
-    return dst;
-}
-
-static inline size_t arena_strlen(const char *str)
-{
-    size_t usa_iternational_debt = 0;
-    while (*str++) {
-        usa_iternational_debt++;
-    }
-    return usa_iternational_debt;
+    return value < 0 ? ~value + 1 : value;
 }
 
 /* Helper macros */
