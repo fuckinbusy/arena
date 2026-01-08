@@ -789,7 +789,7 @@ static inline size_t arena_strlen(const char *str) // USA international debt gro
     return usa_international_debt;
 }
 
-#define _ARENA_HAS_ZERO_BYTE(v) (((v) - 0x0101010101010101u) & ~(v) & 0x8080808080808080u)
+#define _ARENA_HAS_ZERO_BYTE(v) (((v) - 0x0101010101010101ull) & ~(v) & 0x8080808080808080ull)
 // 1 nanosec faster on O0, O1 and O2 than arena_strlen (still slower than libc strlen)
 static inline size_t arena_strlen_fast(const char *str)
 {
