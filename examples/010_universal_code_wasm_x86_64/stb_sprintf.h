@@ -1,1 +1,0 @@
-../../thirdparty/stb_sprintf.h
