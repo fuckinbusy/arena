@@ -37,7 +37,7 @@ typedef uintptr_t arena_ptr_t;
 #define _ARENA_PLATFORM_UNIX  0x8
 
 #ifdef __GNUC__
-    #define _ARENA_FORCE_INLINE   __attribute__((always_inline))
+    #define _ARENA_FORCE_INLINE static inline __attribute__((always_inline))
     #define _ARENA_PREFETCH(addr) __builtin_prefetch((addr))
 #else
     #define _ARENA_FORCE_INLINE static inline
@@ -100,7 +100,7 @@ typedef enum ArenaGrowthContract {
 typedef enum ArenaGrowthFactor {
     ARENA_GROWTH_FACTOR_NONE        = 0x0,    // none =D
     ARENA_GROWTH_FACTOR_EXPONENTIAL = 0x2,    // for mul operation
-    ARENA_GROWTH_FACTOR_LINEAR      = 0x200,  // for add operation
+    ARENA_GROWTH_FACTOR_LINEAR      = 0x400,  // for add operation
     ARENA_GROWTH_FACTOR_PAGE        = 0x1000, // reflects size of page (not user's platform actual page size)
     ARENA_GROWTH_FACTOR_DEFAULT     = ARENA_GROWTH_FACTOR_NONE,
 } ArenaGrowthFactor;
@@ -159,7 +159,7 @@ typedef enum ArenaAlignment {
     ARENA_ALIGN_SIMD_AVX512    = 512,
 
     // Cache line sized alignment
-    ARENA_ALIGN_CACHELINE = 64,
+    ARENA_ALIGN_CACHELINE = 64, // TODO make sure this is used for addresses only and not for the size of allocations!!!
 } ArenaAlignment;
 
 static inline const char *arena_capacity_str(size_t capacity)
@@ -198,16 +198,16 @@ static inline const char *arena_platform_str()
         case _ARENA_PLATFORM_WIN64: return "WIN64";
         case _ARENA_PLATFORM_UNIX:  return "UNIX";
         case _ARENA_PLATFORM_LIBC:  return "LIBC";
-        default:                   return "UNKNOWN";
+        default:                    return "UNKNOWN";
     }
 }
 
 typedef enum ArenaFlag {
     ARENA_FLAG_NONE              = 0,
-    ARENA_FLAG_FILLZEROES        = 1 << 0,
+    ARENA_FLAG_FILLZEROES        = 1,
     ARENA_FLAG_DEBUG             = 1 << 1,
     ARENA_FLAG_ENFORCE_ALIGNMENT = 1 << 2,
-    // ARENA_FLAG_TRACK_ALLOC       = 1 << 3,
+    ARENA_FLAG_RESET_AFTER_GROW  = 1 << 3,
 } ArenaFlag;
 
 typedef struct ArenaConfig {
@@ -219,13 +219,19 @@ typedef struct ArenaConfig {
     ArenaFlag           flags;
 } ArenaConfig;
 
-// TODO
 typedef struct ArenaDebugInfo {
     uint8_t      *end;              // address to the end of the last allocated block of memory
-    uint32_t     arena_state;       // current state of the arena
+    arena_size_t epoch;       // current state of the arena
     arena_size_t bytes_lost;        // bytes loss due to alignment
     size_t       total_allocations; // obviously number of total allocations
 } ArenaDebugInfo;
+
+typedef struct ArenaMemory {
+    void         *data;     // pointer to the memory (invalidates after arena_grow())
+    arena_size_t size;      // memory size
+    arena_size_t offset;    // offset from the arena base to the memory base/data
+    size_t       alignment; // how data is aligned in this memory
+} ArenaMemory;
 
 typedef struct Arena {
     uint8_t             *base;           // arena base address
@@ -238,7 +244,7 @@ typedef struct Arena {
     ArenaFlag           flags;           // arena flags - ARENA_FLAG_...
     uint32_t            alloc_type;      // reflects how arena memory was originally allocated and must not change during arena lifetime
 
-    ArenaDebugInfo debug;
+    ArenaDebugInfo      debug;
 } Arena;
 
 #define ARENA_EMPTY ((Arena){0})
@@ -247,11 +253,14 @@ static inline Arena arena_create_ex(ArenaConfig config);
 static inline ArenaConfig arena_config_create(arena_size_t capacity, arena_size_t max_capacity, ArenaAlignment base_alignment, ArenaGrowthContract contract, size_t growth_factor, ArenaFlag flags);
 static inline Arena arena_create(size_t capacity);
 static inline void arena_destroy(Arena *arena);
-static inline void *arena_alloc(Arena *arena, arena_size_t size, size_t alignment);
-static inline void *arena_alloc_zero(Arena *arena, arena_size_t size, size_t alignment);
+static inline ArenaMemory arena_alloc(Arena *arena, arena_size_t size, size_t alignment);
+static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alignment);
+static inline ArenaMemory arena_alloc_zero(Arena *arena, arena_size_t size, size_t alignment);
+static inline void *arena_alloc_zero_raw(Arena *arena, arena_size_t size, size_t alignment);
 static inline void arena_reset(Arena *arena);
 static inline bool arena_grow(Arena *arena, arena_size_t grow_size);
 static inline bool arena_set_growth_contract(Arena *arena, ArenaGrowthContract contract, size_t growth_factor);
+static inline bool arena_memory_resolve(Arena *arena, ArenaMemory *memory);
 
 static inline bool arena_memcpy_within(Arena *arena, void *dst, const void *src, size_t count);
 static inline void *arena_memset_within(Arena *arena, void *dst, int value, size_t count);
@@ -259,10 +268,11 @@ static inline long long arena_abs(long long value);
 
 #ifdef ARENA_USE_STD_STRING // if defined <string.h> functions will be used
     #include <string.h>
-    #define arena_memcpy memcpy
-    #define arena_memset memset
-    #define arena_strdup strdup
-    #define arena_strlen strlen
+    #define arena_memcpy      memcpy
+    #define arena_memset      memset
+    #define arena_strdup      strdup
+    #define arena_strlen      strlen
+    #define arena_strlen_fast strlen
 #else
     static inline void *arena_memcpy(void *dst, const void *src, size_t count);
     static inline void *arena_memset(void *dst, int value, size_t size);
@@ -343,7 +353,7 @@ _ARENA_FORCE_INLINE size_t _arena_get_platform_page_size()
     #endif
 }
 
-_ARENA_FORCE_INLINE void *_arena_alloc_arena(size_t alloc_size, uint32_t alloc_type)
+static inline void *_arena_alloc_arena(size_t alloc_size, uint32_t alloc_type)
 {
     void *mem = NULL;
     size_t page_size = _arena_get_platform_page_size();
@@ -496,7 +506,31 @@ static inline void arena_destroy(Arena *arena)
     ARENA_LOG("Arena destroyed. Platform: %s", arena_platform_str());
 }
 
-static inline void *arena_alloc(Arena *arena, arena_size_t size, size_t alignment)
+static inline ArenaMemory arena_alloc(Arena *arena, arena_size_t size, size_t alignment)
+{
+    void *p = arena_alloc_raw(arena, size, alignment);
+    return (ArenaMemory){
+        .data      = p,
+        .size      = p == NULL ? 0 : size,
+        .offset    = p == NULL ? 0 : (arena_ptr_t)p - (arena_ptr_t)arena->base,
+        .alignment = alignment
+    };
+}
+
+static inline void 
+_arena_calc_alloc_data(
+    Arena *arena, arena_size_t size, 
+    size_t alignment, arena_ptr_t *address, 
+    arena_ptr_t *aligned_address, 
+    arena_size_t *new_offset, arena_size_t *lost_bytes)
+{
+    *address = (arena_ptr_t)arena->base + arena->offset;
+    *aligned_address = (arena_ptr_t)_arena_align_up((*address), alignment);
+    *lost_bytes = (arena_size_t)((*aligned_address) - (*address));
+    *new_offset = ((*aligned_address) - (arena_ptr_t)arena->base) + size;
+}
+
+static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alignment)
 {
     if (!arena || size == 0 || !_arena_is_pow2(alignment)) return NULL;
 
@@ -504,12 +538,22 @@ static inline void *arena_alloc(Arena *arena, arena_size_t size, size_t alignmen
     if (arena->flags & ARENA_FLAG_ENFORCE_ALIGNMENT)
         alignment = arena->base_alignment;
 
-    arena_ptr_t  addr         = (arena_ptr_t)arena->base + arena->offset;
-    arena_ptr_t  aligned_addr = (arena_ptr_t)_arena_align_up(addr, alignment);
-    arena_size_t lost_bytes   = (arena_size_t)(aligned_addr - addr);
-    arena_size_t new_offset   = (aligned_addr - (arena_ptr_t)arena->base) + size;
+    arena_ptr_t  addr         = 0;
+    arena_ptr_t  aligned_addr = 0;
+    arena_size_t lost_bytes   = 0;
+    arena_size_t new_offset   = 0;
 
-    if (new_offset > arena->capacity) return NULL;
+    _arena_calc_alloc_data(arena, size, alignment, &addr, &aligned_addr, &new_offset, &lost_bytes);
+
+    if (new_offset > arena->capacity) {
+        if (arena->growth_contract == ARENA_GROWTH_CONTRACT_FIXED) return NULL;
+        ARENA_LOG("New size for growth: "ARENA_SIZE_FMT"", (new_offset - arena->capacity) + arena->capacity);
+        if (!arena_grow(arena, (new_offset - arena->capacity) + arena->capacity)) return NULL;
+        if (arena->flags & ARENA_FLAG_RESET_AFTER_GROW) {
+            // if arena was resetted then must recalc all alloc related data here
+            _arena_calc_alloc_data(arena, size, alignment, &addr, &aligned_addr, &new_offset, &lost_bytes);
+        }
+    }
 
     arena_size_t alloc_size = new_offset - arena->offset;
 
@@ -549,12 +593,21 @@ static inline void *arena_alloc(Arena *arena, arena_size_t size, size_t alignmen
     return (void*)aligned_addr;
 }
 
-static inline void *arena_alloc_zero(Arena *arena, arena_size_t size, size_t alignment)
+static inline ArenaMemory arena_alloc_zero(Arena *arena, arena_size_t size, size_t alignment)
 {
     ARENA_LOG("Arena `arena_alloc_zero` called.");
-    void *p = arena_alloc(arena, size, alignment); // params will be checked here so dont need
-    if (p) arena_memset(p, 0, size);
-    return p;
+
+    void *p = arena_alloc_raw(arena, size, alignment);
+    if (!p) return (ArenaMemory){NULL, 0, 0};
+
+    arena_memset(p, 0, size);
+
+    return (ArenaMemory){
+        .data      = p,
+        .size      = size,
+        .offset    = (arena_ptr_t)p - (arena_ptr_t)arena->base,
+        .alignment = alignment
+    };
 }
 
 // this function MUST return size that is aligned to arena base alignment
@@ -567,49 +620,35 @@ static inline size_t _arena_calc_new_alloc_size(Arena *arena, arena_size_t requi
             while (new_size < required_capacity) {
                 new_size = _arena_sadd(new_size, arena->growth_factor, arena->max_capacity);
             }
-            if (!_arena_is_aligned_to(new_size, arena->base_alignment))
-                new_size = _arena_align_up(new_size, arena->base_alignment);
         } break;
 
         case ARENA_GROWTH_CONTRACT_EXPONENTIAL: {
             while (new_size < required_capacity) {
                 new_size = _arena_smul(new_size, arena->growth_factor, arena->max_capacity);
             }
-            if (!_arena_is_aligned_to(new_size, arena->base_alignment)) 
-                new_size = _arena_align_up(new_size, arena->base_alignment);
         } break;
 
         case ARENA_GROWTH_CONTRACT_PAGE: {
             uint32_t pages_required = (uint32_t)((required_capacity + (arena->growth_factor - 1)) / arena->growth_factor);
             new_size = arena->capacity * pages_required;
-            if (!_arena_is_aligned_to(new_size, arena->growth_factor))  // need to make sure if new size is aligned to the page size
-                new_size = _arena_align_up(new_size, arena->growth_factor);
         } break;
 
-        default: 
-            return 0;
+        default: return 0;
     }
 
     bool overflow = false;
     size_t alloc_size = _arena_downcast_size(new_size, &overflow);
-    if (!_arena_is_aligned_to(alloc_size, arena->base_alignment)) { // explicit assertion. should never happen
-        ARENA_LOG(
-            "Warning: in `%s` allocation size is not aligned to %d after downcasting. Allocation size: %zu",
-            __func__, arena->base_alignment, alloc_size
-        );
-        return 0;
-    }
-
-    if (arena->flags & ARENA_FLAG_DEBUG) {
+    if (arena->flags & ARENA_FLAG_DEBUG && overflow == true) {
         ARENA_LOG("Warning: Overflow catched in `%s` while downcasting. Max system integer size will be returned.", __func__);
     }
 
     return alloc_size;
 }
 
-// Resizes arena backing storage
-// All previously allocated objects are invalidated
-// Arena is reset to empty state after grow
+// Resizes arena memory storage
+// Arena is reset to empty state after grow if ARENA_FLAG_RESET_AFTER_GROW is set
+// All previously obtained pointers are invalidated after grow
+// Use arena_memory_resolve to validate back old pointers if needed
 static inline bool arena_grow(Arena *arena, arena_size_t required_size)
 {
     if (!arena || arena->capacity == 0 || arena->growth_contract == ARENA_GROWTH_CONTRACT_FIXED) return false;
@@ -622,35 +661,33 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_size)
     void *old_base = arena->base;
     
     if (arena->alloc_type == ARENA_ALLOC_TYPE_BIG) {
-    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)   
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
         new_base = VirtualAlloc(NULL, alloc_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        if (new_base) {
-            memcpy_s(new_base, alloc_size, old_base, arena->capacity);
-            VirtualFree(old_base, arena->capacity, MEM_RELEASE);
-        }
+        if (!new_base) return false;
+        arena_memcpy(new_base, old_base, arena->capacity);
+        VirtualFree(old_base, arena->capacity, MEM_RELEASE);
     #elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
         new_base = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-        if (new_base != MAP_FAILED) {
-            memcpy(new_base, old_base, arena->capacity);
-        } else { new_base = NULL; }
-        
+        if (new_base == MAP_FAILED) return false;
+        arena_memcpy(new_base, old_base, arena->capacity);
         munmap(old_base, arena->capacity);
     #elif ARENA_PLATFORM == _ARENA_PLATFORM_LIBC
         new_base = realloc(old_base, alloc_size);
+        if (!new_base) return false;
+        arena_memcpy(new_base, old_base, arena->capacity);
     #endif
     } else {
         new_base = realloc(old_base, alloc_size);
+        if (!new_base) return false;
+        arena_memcpy(new_base, old_base, arena->capacity);
     }
     
-    if (!new_base) return false;
-    
-    ARENA_LOG("Arena grows from %zu to %zu (requested size: "ARENA_SIZE_FMT")", arena->capacity, alloc_size);
+    ARENA_LOG("Arena grows from %zu to %zu (requested size: "ARENA_SIZE_FMT")", arena->capacity, alloc_size, required_size);
     arena->base     = new_base;
     arena->capacity = alloc_size;
 
-    arena_reset(arena); // Bye bye =D
-
+    if (arena->flags & ARENA_FLAG_RESET_AFTER_GROW) arena_reset(arena); // Bye bye =D
+    
     return true;
 }
 
@@ -683,12 +720,28 @@ static inline bool arena_set_growth_contract(Arena *arena, ArenaGrowthContract c
     return false;
 }
 
+static inline bool arena_memory_resolve(Arena *arena, ArenaMemory *memory)
+{
+    if (
+        !arena                             || 
+        !memory                            || 
+        (arena->capacity < memory->offset) || 
+        arena->capacity == 0               || 
+        arena->offset < memory->offset
+    ) return false;
+    
+    memory->data = (void*)((arena_ptr_t)arena->base + memory->offset);
+    
+    return true;
+}
+
 static inline void arena_reset(Arena *arena)
 {
     if (arena && arena->base && arena->capacity > 0) {
         arena->offset = 0;
         // memset(arena->base, _ARENA_POISON_RESET, arena->capacity);
         ARENA_LOG("Arena reset");
+        if (arena->flags & ARENA_FLAG_DEBUG) arena->debug.epoch++;
     }
 }
 
@@ -775,7 +828,7 @@ static inline void *arena_memset(void *dst, int value, size_t size)
 static inline char *arena_strdup(Arena *arena, const char *src)
 {
     if (!arena || arena->capacity == 0 || !src) return NULL;
-    void *dst = arena_alloc(arena, arena_strlen(src)+1, alignof(char));
+    void *dst = arena_alloc_raw(arena, arena_strlen(src)+1, alignof(char));
     if (dst) arena_memcpy(dst, src, arena_strlen(src)+1);
     return dst;
 }
@@ -854,8 +907,8 @@ static inline long long arena_abs(long long value)
 }
 
 /* Helper macros */
-#define arena_alloc_struct(pArena, type)           ((type*)arena_alloc((pArena), sizeof(type), alignof(type)))
-#define arena_alloc_array(pArena, size, type)      ((size) == 0 ? NULL : (type*)arena_alloc((pArena), sizeof(type)*size, alignof(type)))
+#define arena_alloc_struct(pArena, type)           ((type*)arena_alloc_raw((pArena), sizeof(type), alignof(type)))
+#define arena_alloc_array(pArena, size, type)      ((size) == 0 ? NULL : (type*)arena_alloc_raw((pArena), sizeof(type)*size, alignof(type)))
 #define arena_alloc_struct_zero(pArena, type)      ((type*)arena_alloc_zero((pArena), sizeof(type), alignof(type)))
 #define arena_alloc_array_zero(pArena, size, type) ((size) == 0 ? NULL : (type*)arena_alloc_zero((pArena), sizeof(type)*size, alignof(type)))
 
