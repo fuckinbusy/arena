@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <time.h>
 // #define ARENA_PLATFORM ARENA_PLATFORM_LIBC
+// #define ARENA_LOGGING
 #define ARENA_IMPLEMENTATION
 #include "arena.h"
 
@@ -67,8 +68,8 @@ TEST_CREATE(test_arena_alignment)
 {
     Arena arena = arena_create(ARENA_CAPACITY_2KB);
     
-    void *pa = arena_alloc(&arena, 1, ARENA_ALIGN_CACHELINE);
-    void *pb = arena_alloc(&arena, 13, ARENA_ALIGN_CACHELINE);
+    void *pa = arena_alloc_raw(&arena, 1, ARENA_ALIGN_CACHELINE);
+    void *pb = arena_alloc_raw(&arena, 13, ARENA_ALIGN_CACHELINE);
     
     ASSERT(((uintptr_t)pa % ARENA_ALIGN_CACHELINE) == 0);
     ASSERT(((uintptr_t)pb % ARENA_ALIGN_CACHELINE) == 0);
@@ -83,7 +84,7 @@ TEST_CREATE(test_arena_overflow)
 {
     Arena arena = arena_create(ARENA_CAPACITY_2KB);
 
-    void *p = arena_alloc(&arena, 0x4000, ARENA_ALIGN_8B);
+    void *p = arena_alloc_raw(&arena, 0x4000, ARENA_ALIGN_8B);
     ASSERT(p == NULL);
 
     arena_destroy(&arena);
@@ -96,12 +97,12 @@ TEST_CREATE(test_arena_reset)
 {
     Arena arena = arena_create(ARENA_CAPACITY_2KB);
 
-    void *pa = arena_alloc(&arena, 0x400, ARENA_ALIGN_CACHELINE);
+    void *pa = arena_alloc_raw(&arena, 0x400, ARENA_ALIGN_CACHELINE);
     ASSERT(pa != NULL);
 
     arena_reset(&arena);
 
-    void *pb = arena_alloc(&arena, 0x400, ARENA_ALIGN_CACHELINE);
+    void *pb = arena_alloc_raw(&arena, 0x400, ARENA_ALIGN_CACHELINE);
     ASSERT(pb != NULL);
 
     ASSERT(pa == pb);
@@ -119,41 +120,93 @@ TEST_CREATE(test_arena_grow_linear)
         ARENA_CAPACITY_8KB,
         ARENA_ALIGN_8B,
         ARENA_GROWTH_CONTRACT_LINEAR,
-        1024,
-        ARENA_FLAG_NONE
+        ARENA_GROWTH_FACTOR_LINEAR,
+        ARENA_FLAG_RESET_AFTER_GROW | ARENA_FLAG_DEBUG
     ));
 
     ASSERT(arena.capacity >= ARENA_CAPACITY_1KB);
     ASSERT(arena.max_capacity == ARENA_CAPACITY_8KB);
 
-    void *p = arena_alloc(&arena, 2048, ARENA_ALIGN_16B);
-    if (!p) {
-        ASSERT(arena_grow(&arena, 2048));
-        ASSERT(arena.offset == 0);
-        ASSERT(arena.capacity > ARENA_CAPACITY_1KB);
-        p = arena_alloc(&arena, 2048, ARENA_ALIGN_16B);
-    }
+    void *p = arena_alloc_raw(&arena, 512, ARENA_ALIGN_16B);
     ASSERT(p != NULL);
+    ASSERT(arena.offset > 0);
+    arena_size_t old_offset = arena.offset;
+
+    p = NULL;
+    p = arena_alloc_raw(&arena, 1024, ARENA_ALIGN_16B);
+    ASSERT(p != NULL);
+    ASSERT(arena.offset > 0);
+    ASSERT(arena.offset != old_offset);
+    old_offset = arena.offset;
+    
+    p = NULL;
+    p = arena_alloc_raw(&arena, 2048, ARENA_ALIGN_16B);
+    ASSERT(p != NULL);
+    ASSERT(arena.offset > 0);
+    ASSERT(arena.offset != old_offset);
 
     arena_reset(&arena);
     ASSERT(arena.offset == 0);
 
-    p = arena_alloc(&arena, 4096, ARENA_ALIGN_8B);
+    p = arena_alloc_raw(&arena, 4096, ARENA_ALIGN_8B);
     if (!p) {
         ASSERT(!arena_grow(&arena, 16384));
         ASSERT(arena_grow(&arena, arena.max_capacity));
         ASSERT(arena.capacity == arena.max_capacity);
-        ASSERT(!arena_alloc(&arena, arena.max_capacity, ARENA_ALIGN_CACHELINE)); // OOM out of memory
-        p = arena_alloc(&arena, (arena.capacity - (ARENA_ALIGN_CACHELINE - 1)), ARENA_ALIGN_CACHELINE);
+        ASSERT(!arena_alloc_raw(&arena, arena.max_capacity, ARENA_ALIGN_CACHELINE)); // OOM out of memory
+        p = arena_alloc_raw(&arena, (arena.capacity - (ARENA_ALIGN_CACHELINE - 1)), ARENA_ALIGN_CACHELINE);
     }
     ASSERT(p != NULL);
+
+    ASSERT(arena.debug.epoch > 0);
 
     arena_destroy(&arena);
 
     return true;
 }
 
-TEST_CREATE(test_arena_stress)
+TEST_CREATE(test_arena_memory_resolve) {
+    Arena arena = arena_create_ex(arena_config_create(
+        ARENA_CAPACITY_1KB,
+        ARENA_CAPACITY_4KB,
+        ARENA_ALIGN_CACHELINE,
+        ARENA_GROWTH_CONTRACT_LINEAR,
+        ARENA_GROWTH_FACTOR_LINEAR,
+        ARENA_FLAG_DEBUG
+    ));
+
+    ArenaMemory mem = arena_alloc(&arena, 731, 4);
+    *(int*)mem.data = 0x1F;
+    ASSERT(*(int*)mem.data == 0x1F);
+    ASSERT(mem.data != NULL);
+    ASSERT(mem.offset == 0);
+    ASSERT(mem.size == 731);
+    
+    arena_size_t old_offset = arena.offset;
+    
+    ArenaMemory mem2 = arena_alloc(&arena, 999, 4);
+    *(int*)mem2.data = 0xF1;
+    ASSERT(*(int*)mem2.data == 0xF1);
+    ASSERT(mem2.data != NULL);
+    ASSERT(mem2.offset > 0);
+    ASSERT(mem2.data != mem.data);
+    ASSERT(mem2.size == 999);
+    ASSERT(mem2.offset > mem.offset);
+    
+    ASSERT(arena_memory_resolve(&arena, &mem));
+    ASSERT(*(int*)mem.data == 0x1F);
+
+    ArenaMemory mem3 = arena_alloc(&arena, 1024, 8);
+    ASSERT(mem3.data != NULL);
+    ASSERT(arena_memory_resolve(&arena, &mem2));
+    ASSERT(*(int*)mem2.data == 0xF1);
+
+    arena_destroy(&arena);
+
+    return true;
+}
+
+TEST_CREATE(test_arena_stress_no_grow)
 {
     const uint32_t ITERATIONS = 1000000;
 
@@ -184,7 +237,7 @@ TEST_CREATE(test_arena_stress)
         };
         size_t alignment = alignments[randrand()%4];
 
-        void *p = arena_alloc(&arena, size, alignment);
+        void *p = arena_alloc_raw(&arena, size, alignment);
 
         if (!p) break;
 
@@ -206,12 +259,12 @@ TEST_CREATE(test_arena_stress)
     
     arena_reset(&arena);
 
-    void *a = arena_alloc(&arena, 64, ARENA_ALIGN_DEFAULT);
+    void *a = arena_alloc_raw(&arena, 64, ARENA_ALIGN_DEFAULT);
     ASSERT(a != NULL);
     
     arena_reset(&arena);
     
-    void *b = arena_alloc(&arena, 64, ARENA_ALIGN_DEFAULT);
+    void *b = arena_alloc_raw(&arena, 64, ARENA_ALIGN_DEFAULT);
     ASSERT(b != NULL);
     
     ASSERT(b == a);
@@ -230,6 +283,7 @@ int main(void)
     TEST_RUN(test_arena_overflow);
     TEST_RUN(test_arena_reset);
     TEST_RUN(test_arena_grow_linear);
-    TEST_RUN(test_arena_stress);
+    TEST_RUN(test_arena_memory_resolve);
+    TEST_RUN(test_arena_stress_no_grow);
     return 0;
 }
