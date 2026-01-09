@@ -2,7 +2,7 @@
 
 [Arena Allocator](https://en.wikipedia.org/wiki/Region-based_memory_management) implementation in pure C as an [stb-style single-file library](https://github.com/nothings/stb).
 
-*I just caught myself implementing this over and over again in my projects, so I decided to turn it into a copy-pastable library similar to [sv](http://github.com/tsoding/sv)*
+*Project for China University of Petroleum (UPC) Internship.*
 
 ## Quick Start
 
