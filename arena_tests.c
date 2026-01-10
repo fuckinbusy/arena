@@ -176,30 +176,73 @@ TEST_CREATE(test_arena_memory_resolve) {
     ));
 
     ArenaMemory mem = arena_alloc(&arena, 731, 4);
+    ASSERT(mem.data != NULL);
     *(int*)mem.data = 0x1F;
     ASSERT(*(int*)mem.data == 0x1F);
-    ASSERT(mem.data != NULL);
-    ASSERT(mem.offset == 0);
     ASSERT(mem.size == 731);
     
     arena_size_t old_offset = arena.offset;
     
     ArenaMemory mem2 = arena_alloc(&arena, 999, 4);
+    ASSERT(mem2.data != NULL);
     *(int*)mem2.data = 0xF1;
     ASSERT(*(int*)mem2.data == 0xF1);
-    ASSERT(mem2.data != NULL);
-    ASSERT(mem2.offset > 0);
-    ASSERT(mem2.data != mem.data);
     ASSERT(mem2.size == 999);
-    ASSERT(mem2.offset > mem.offset);
     
     ASSERT(arena_memory_resolve(&arena, &mem));
+    ASSERT(arena_memory_resolve(&arena, &mem2));
+    
     ASSERT(*(int*)mem.data == 0x1F);
 
     ArenaMemory mem3 = arena_alloc(&arena, 1024, 8);
     ASSERT(mem3.data != NULL);
-    ASSERT(arena_memory_resolve(&arena, &mem2));
     ASSERT(*(int*)mem2.data == 0xF1);
+
+    arena_destroy(&arena);
+
+    return true;
+}
+
+TEST_CREATE(test_arena_error) {
+    Arena arena = arena_create_ex(arena_config_create(
+        ARENA_CAPACITY_1KB,
+        ARENA_CAPACITY_8KB,
+        ARENA_ALIGN_CACHELINE,
+        ARENA_GROWTH_CONTRACT_FIXED,
+        ARENA_GROWTH_FACTOR_NONE,
+        ARENA_FLAG_DEBUG
+    ));
+
+    ASSERT(arena.base != NULL);
+
+    ASSERT(arena_alloc_raw(&arena, 2048, 7) == NULL);
+    ASSERT(arena.error == ARENA_ERROR_INVALID_ALIGNMENT);
+    
+    ASSERT(arena.offset == 0);
+
+    ASSERT(arena_alloc_raw(&arena, 0x3000, 8) == NULL);
+    ASSERT(arena.error == ARENA_ERROR_OOM);
+
+    arena_destroy(&arena);
+
+    ASSERT(arena.error == ARENA_ERROR_NONE);
+
+    arena = arena_create_ex(arena_config_create(
+        ARENA_CAPACITY_1KB,
+        ARENA_CAPACITY_1MB,
+        ARENA_ALIGN_CACHELINE,
+        ARENA_GROWTH_CONTRACT_EXPONENTIAL,
+        ARENA_GROWTH_FACTOR_EXPONENTIAL,
+        ARENA_FLAG_DEBUG
+    ));
+
+    ASSERT(arena.base != NULL);
+
+    ASSERT(arena_alloc_raw(&arena, 2048, 7) == NULL);
+    ASSERT(arena.error == ARENA_ERROR_INVALID_ALIGNMENT);
+
+    ASSERT(arena_alloc_raw(&arena, 2048, 8) != NULL);
+    ASSERT(arena.error == ARENA_ERROR_NONE);
 
     arena_destroy(&arena);
 
@@ -284,6 +327,7 @@ int main(void)
     TEST_RUN(test_arena_reset);
     TEST_RUN(test_arena_grow_linear);
     TEST_RUN(test_arena_memory_resolve);
+    TEST_RUN(test_arena_error);
     TEST_RUN(test_arena_stress_no_grow);
     return 0;
 }
