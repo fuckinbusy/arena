@@ -14,7 +14,7 @@ static bool window_busy = false;
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 800
-#define NUM_POINTS ((WINDOW_WIDTH*WINDOW_HEIGHT)/4)
+#define NUM_POINTS ((WINDOW_WIDTH*WINDOW_HEIGHT)/6)
 
 static SDL_FPoint **points = NULL;
 
@@ -27,7 +27,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
         return SDL_APP_FAILURE;
     }
 
-    if (!SDL_CreateWindowAndRenderer("Arena benchmark", WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
+    if (!SDL_CreateWindowAndRenderer("Arena benchmark", WINDOW_WIDTH, WINDOW_HEIGHT, 0, &window, &renderer)) {
         SDL_Log("Couldn't create window/renderer: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
@@ -36,7 +36,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     arena = arena_create_ex(arena_config_create(
         ARENA_CAPACITY_16MB,
         ARENA_CAPACITY_32MB,
-        ARENA_ALIGN_CACHELINE,
         ARENA_GROWTH_CONTRACT_FIXED,
         0,
         ARENA_FLAG_DEBUG
@@ -107,7 +106,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
 
     for (size_t i = 0; i < NUM_POINTS; ++i) {
         SDL_RenderPoint(renderer, points[i]->x, points[i]->y);

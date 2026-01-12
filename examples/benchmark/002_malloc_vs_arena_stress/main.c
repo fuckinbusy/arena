@@ -15,7 +15,6 @@ int main(int argc, char const *argv[])
     Arena arena = arena_create_ex(arena_config_create(
         ARENA_CAPACITY_8MB,
         ARENA_CAPACITY_64MB,
-        ARENA_ALIGN_CACHELINE,
         ARENA_GROWTH_CONTRACT_FIXED,
         ARENA_GROWTH_FACTOR_NONE,
         ARENA_FLAG_DEBUG
@@ -35,7 +34,7 @@ int main(int argc, char const *argv[])
     long t2 = clock();
 
     float time_result = (float)(t2 - t) * 1000.0 / CLOCKS_PER_SEC;
-    printf("Arena: %.3f ms (Allocations: %zu) (Memory used: %0.1f MB)\n", time_result, allocations, (double)arena.offset / (1024*1024));
+    printf("Arena: %.3f ms (Allocations: %zu) (Memory used: %0.1f MB)\n", time_result, allocations, (double)arena.last_chunk->offset / (1024*1024));
     arena_reset(&arena);
     arena_destroy(&arena);
     arena_memset(vectors, 0, sizeof(FVec3*)*ITERATIONS);
