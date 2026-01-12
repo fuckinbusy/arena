@@ -536,7 +536,7 @@ static inline Arena arena_create_ex(ArenaConfig config)
 
         case ARENA_GROWTH_CONTRACT_REALLOC: {
             if (config.growth_factor > ARENA_GROWTH_FACTOR_REALLOC_8X) config.growth_factor = ARENA_GROWTH_FACTOR_REALLOC_8X;
-            if (config.growth_factor == 0) config.growth_factor = ARENA_GROWTH_FACTOR_REALLOC_2X;
+            if (config.growth_factor < 2) config.growth_factor = ARENA_GROWTH_FACTOR_REALLOC_2X;
         } break;
 
         default: {

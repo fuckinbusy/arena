@@ -482,10 +482,10 @@ static inline size_t _arena_calc_realloc_size(Arena *arena, arena_size_t require
 static inline ArenaChunk *_arena_realloc(Arena* arena, size_t required_chunk_capacity)
 {
     // if how much we have already + how much we need (new total) is more than max cap then OOM
-    if (arena->reserved + required_chunk_capacity > arena->max_capacity) {
-        _arena_set_error(arena, ARENA_ERROR_OOM);
-        return NULL;
-    }
+    // if (required_chunk_capacity > arena->max_capacity) {
+    //     _arena_set_error(arena, ARENA_ERROR_OOM);
+    //     return NULL;
+    // }
 
     ArenaChunk *new_chunk = NULL;
     ArenaChunk *old_chunk = arena->last_chunk;
@@ -514,7 +514,7 @@ static inline ArenaChunk *_arena_realloc(Arena* arena, size_t required_chunk_cap
         if (!new_chunk) return NULL;
     }
 
-    new_chunk->capacity = required_chunk_capacity;
+    new_chunk->capacity = realloc_size - sizeof(ArenaChunk);
     arena->reserved     = new_chunk->capacity; 
     // because for realloc contract we store capacity of only one chunk
     // so `reserved` should be same as new chunk capacity (as we have only one chunk)
@@ -536,7 +536,7 @@ static inline Arena arena_create_ex(ArenaConfig config)
 
         case ARENA_GROWTH_CONTRACT_REALLOC: {
             if (config.growth_factor > ARENA_GROWTH_FACTOR_REALLOC_8X) config.growth_factor = ARENA_GROWTH_FACTOR_REALLOC_8X;
-            if (config.growth_factor == 0) config.growth_factor = ARENA_GROWTH_FACTOR_REALLOC_2X;
+            if (config.growth_factor < 2) config.growth_factor = ARENA_GROWTH_FACTOR_REALLOC_2X;
         } break;
 
         default: {
@@ -744,8 +744,6 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
         _arena_set_error(arena, ARENA_ERROR_OOM);
         return false;
     }
-
-    size_t alloc_size = 0;
     
     switch (arena->growth_contract) {
         case ARENA_GROWTH_CONTRACT_FIXED: return false;
