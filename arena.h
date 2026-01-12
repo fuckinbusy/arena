@@ -510,6 +510,8 @@ static inline ArenaChunk *_arena_realloc(Arena* arena, size_t required_chunk_cap
 
     new_chunk->capacity = realloc_size - sizeof(ArenaChunk);
     arena->reserved     = new_chunk->capacity; 
+    arena->head_chunk   = new_chunk;
+    arena->last_chunk   = new_chunk;
     // because for realloc contract we store capacity of only one chunk
     // so `reserved` should be same as new chunk capacity (as we have only one chunk)
 
@@ -593,7 +595,7 @@ static inline Arena arena_create(arena_size_t capacity)
 
 static inline void arena_destroy(Arena *arena)
 {
-    if (!arena || !arena->last_chunk) return;
+    if (!arena || !arena->head_chunk) return;
 
     ArenaChunk *chunk = arena->head_chunk;
     ArenaChunk *next_chunk = NULL;
@@ -809,10 +811,20 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
     return true;
 }
 
+// TODO change invariant
 static inline void *arena_memory_resolve(Arena *arena, ArenaMemory *memory)
 {
     if (!arena || !memory || !arena->last_chunk || memory->epoch != arena->epoch) return NULL;    
-    memory->data = (void*)((arena_ptr_t)memory->chunk->base + memory->offset);
+
+    if (arena->growth_contract == ARENA_GROWTH_CONTRACT_CHUNKY) {
+        memory->data = (void*)((arena_ptr_t)memory->chunk->base + memory->offset);
+    }
+
+    else if (arena->growth_contract == ARENA_GROWTH_CONTRACT_REALLOC) {
+        memory->chunk = arena->head_chunk;
+        memory->data = (void*)((arena_ptr_t)memory->chunk->base + memory->offset);
+    }
+    
     return memory->data;
 }
 
