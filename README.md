@@ -4,12 +4,6 @@
 
 *Project for China University of Petroleum (UPC) Internship.*
 
-## Quick Start
-
-> The truly reusable code is the one that you can simply copy-paste.
-
-The library itself does not require any special building. You can simple copy-paste [./arena.h](./arena.h) to your project and `#include` it.
-
 ## About This Project
 
 This arena allocator was developed as part of an **internship project at China University of Petroleum (UPC)**.
@@ -26,7 +20,11 @@ The allocator targets **performance-sensitive systems** such as compilers, parse
 
 ---
 
-## Tiny Example
+## Quick Start
+
+> The truly reusable code is the one that you can simply copy-paste.
+
+The library itself does not require any special building. You can simple copy-paste [./arena.h](./arena.h) to your project and `#include` it.
 
 ```c
 #include "arena.h"
