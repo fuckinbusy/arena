@@ -22,13 +22,15 @@
 #ifndef ARENA_H_
 #define ARENA_H_
 
-#include <stdbool.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <stdalign.h>
 
-// #include <stdio.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#include <stdint.h>
 typedef uint64_t  arena_size_t;
 #define ARENA_SIZE_FMT "%llu"
 typedef uintptr_t arena_ptr_t;
@@ -58,7 +60,7 @@ typedef uintptr_t arena_ptr_t;
     #endif
 #endif 
 
-#if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
+#if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32)
     #define WIN32_LEAN_AND_MEAN
     #define NOGDI
     #define NOMINMAX
@@ -294,8 +296,8 @@ static inline ArenaMemory arena_alloc_zero(Arena *arena, arena_size_t size, size
 static inline void *arena_alloc_zero_raw(Arena *arena, arena_size_t size, size_t alignment);
 static inline bool arena_reset(Arena *arena);
 static inline bool arena_grow(Arena *arena, arena_size_t grow_size);
-static inline void *arena_memory_resolve(Arena *arena, ArenaMemory *memory);
-static inline ArenaMark arena_mark(Arena *arena);
+static inline void *arena_memory_resolve(const Arena *arena, ArenaMemory *memory);
+static inline ArenaMark arena_mark(const Arena *arena);
 static inline bool arena_restore(Arena *arena, ArenaMark mark, bool poison_memory);
 
 _ARENA_FORCE_INLINE long long arena_abs(long long value);
@@ -343,7 +345,7 @@ _ARENA_FORCE_INLINE arena_size_t _arena_smul(arena_size_t a, arena_size_t b, are
 
 _ARENA_FORCE_INLINE bool _arena_is_pow2(size_t value)
 {
-    return ((value > 0) && ((value & (value - 1)) == 0));
+    return (value && !(value & (value - 1)));
 }
 
 _ARENA_FORCE_INLINE bool _arena_is_aligned_to(arena_size_t value, size_t alignment)
@@ -353,8 +355,8 @@ _ARENA_FORCE_INLINE bool _arena_is_aligned_to(arena_size_t value, size_t alignme
 
 _ARENA_FORCE_INLINE arena_size_t _arena_align_up(arena_size_t value, size_t alignment)
 {
-    if (alignment == 0) return value; // prevents from very dangerous UB
-    return (_arena_sadd(value, alignment - 1, ARENA_U64_MAX)) & ~(alignment - 1);
+    size_t a = alignment ? alignment : 1;
+    return (_arena_sadd(value, a - 1, ARENA_U64_MAX)) & ~(a - 1);
 }
 
 _ARENA_FORCE_INLINE size_t _arena_downcast_size(arena_size_t value, bool *overflow)
@@ -374,7 +376,7 @@ _ARENA_FORCE_INLINE size_t _arena_downcast_size(arena_size_t value, bool *overfl
 
 _ARENA_FORCE_INLINE size_t _arena_get_platform_page_size()
 {
-    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32)
 
     SYSTEM_INFO si;
     GetSystemInfo(&si);
@@ -437,9 +439,9 @@ static inline void *_arena_alloc_chunk(size_t chunk_capacity, uint32_t alloc_typ
             MAP_PRIVATE | MAP_ANONYMOUS,
             -1, 0
         );
-        if (!chunk) goto exit_error;
+        if (chunk == MAP_FAILED) goto exit_error;
         ARENA_LOG("New chunk allocated with `nmap` as %d bytes sized pages. Platform: %s Size: %zu", page_size, arena_platform_str(), chunk_real_size);
-    #elif (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
+    #elif (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32)
         chunk = VirtualAlloc(NULL, chunk_real_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         if (!chunk) goto exit_error;
         ARENA_LOG("New chunk allocated with with `VirtualAlloc` as %d bytes sized pages. Platform: %s Size: %zu", page_size, arena_platform_str(), chunk_real_size);
@@ -469,7 +471,7 @@ exit_error:
     return NULL;
 }
 
-static inline size_t _arena_calc_realloc_size(Arena *arena, arena_size_t required_chunk_capacity)
+static inline size_t _arena_calc_realloc_size(const Arena *arena, arena_size_t required_chunk_capacity)
 {
     arena_size_t cur_capacity = arena->last_chunk->capacity; // starting from the current capacity
 
@@ -498,7 +500,7 @@ static inline ArenaChunk *_arena_realloc(Arena* arena, size_t required_chunk_cap
     size_t memcpy_size  = free_size; // real size of copiable memory
     
     if (arena->alloc_type == ARENA_ALLOC_TYPE_BIG) {
-    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32)
         new_chunk = (ArenaChunk*)VirtualAlloc(NULL, realloc_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         if (!new_chunk) return NULL;
         arena_memcpy(new_chunk, old_chunk, memcpy_size);
@@ -612,10 +614,10 @@ static inline void arena_destroy(Arena *arena)
         while (chunk != NULL) {
             next_chunk = chunk->next;
             ARENA_LOG("Chunk memory released at: %p", chunk);
-    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32) || (ARENA_PLATFORM == _ARENA_PLATFORM_WIN64)
+    #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32)
             VirtualFree(chunk, 0, MEM_RELEASE);
     #elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
-            munmap(chunk, _arena_calc_chunk_real_size(arena, chunk->capacity));
+            munmap(chunk, _arena_calc_chunk_real_size(chunk->capacity));
     #elif ARENA_PLATFORM == _ARENA_PLATFORM_LIBC
             free(chunk);
     #endif
@@ -820,7 +822,7 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
     return true;
 }
 
-static inline void *arena_memory_resolve(Arena *arena, ArenaMemory *memory)
+static inline void *arena_memory_resolve(const Arena *arena, ArenaMemory *memory)
 {
     if (!arena || !memory || !arena->head_chunk || memory->epoch != arena->epoch) return NULL;    
 
@@ -991,10 +993,13 @@ static inline size_t arena_strlen_fast(const char *str)
 
 _ARENA_FORCE_INLINE long long arena_abs(long long value)
 {
-    return value < 0 ? ~value + 1 : value;
+    long long result;
+    const int mask = value >> sizeof(value) * CHAR_BIT - 1;
+    result = (value ^ mask) - mask;
+    return result;
 }
 
-_ARENA_FORCE_INLINE ArenaMark arena_mark(Arena *arena)
+_ARENA_FORCE_INLINE ArenaMark arena_mark(const Arena *arena)
 {
     return (ArenaMark){ 
         .offset = arena->last_chunk->offset,
@@ -1028,5 +1033,9 @@ static inline bool arena_restore(Arena *arena, ArenaMark mark, bool poison_memor
 #define arena_alloc_array_zero(pArena, size, type) ((size) == 0 ? NULL : (type*)arena_alloc_zero((pArena), sizeof(type)*size, alignof(type)))
 
 #endif // ARENA_IMPLEMENTATION
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // ARENA_H_
