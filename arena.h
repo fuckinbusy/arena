@@ -380,20 +380,14 @@ _ARENA_FORCE_INLINE size_t _arena_downcast_size(arena_size_t value, bool *overfl
 _ARENA_FORCE_INLINE size_t _arena_get_platform_page_size()
 {
     #if (ARENA_PLATFORM == _ARENA_PLATFORM_WIN32)
-
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return si.dwPageSize;
-    
     #elif ARENA_PLATFORM == _ARENA_PLATFORM_UNIX
-    
     long ps = sysconf(_SC_PAGESIZE);
     return ps > 0 ? (size_t)ps : ARENA_PAGE_DEFAULT_SIZE;
-    
     #else
-    
     return ARENA_PAGE_DEFAULT_SIZE;
-    
     #endif
 }
 
