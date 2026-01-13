@@ -88,6 +88,10 @@ typedef uintptr_t arena_ptr_t;
 #define ARENA_SIZE_MAX SIZE_MAX
 #define ARENA_PTR_MAX  MAXINT_PTR
 
+#ifndef ARENA_CACHELINE_SIZE
+#define ARENA_CACHELINE_SIZE (uint32_t)64
+#endif
+
 #define _ARENA_POISON_ALLOC         0xCD   // arena memory poisoning value after allocating memory from arena
 #define _ARENA_POISON_RESET         0xDD   // arena memory poisoning value after resetting arena
 #define ARENA_PAGE_ALIGN_THRESHOLD 0x2000  // used to identify when to switch to platform specific allocation 
@@ -175,35 +179,35 @@ typedef enum ArenaAlignment : uint32_t {
     ARENA_ALIGN_SIMD_AVX512    = 512,
 
     // Cache line sized alignment
-    ARENA_ALIGN_CACHELINE = 64,
+    ARENA_ALIGN_CACHELINE = ARENA_CACHELINE_SIZE,
 } ArenaAlignment;
 
 static inline const char *arena_capacity_str(size_t capacity)
 {
     switch (capacity) {
-        case ARENA_CAPACITY_1KB:       return "1KB";       
-        case ARENA_CAPACITY_2KB:       return "2KB";       
-        case ARENA_CAPACITY_4KB:       return "4KB";       
-        case ARENA_CAPACITY_8KB:       return "8KB";       
-        case ARENA_CAPACITY_16KB:      return "16KB";      
-        case ARENA_CAPACITY_32KB:      return "32KB";      
-        case ARENA_CAPACITY_64KB:      return "64KB";      
-        case ARENA_CAPACITY_128KB:     return "128KB";     
-        case ARENA_CAPACITY_256KB:     return "256KB";     
-        case ARENA_CAPACITY_512KB:     return "512KB";     
-        case ARENA_CAPACITY_1MB:       return "1MB";       
-        case ARENA_CAPACITY_2MB:       return "2MB";       
-        case ARENA_CAPACITY_4MB:       return "4MB";       
-        case ARENA_CAPACITY_8MB:       return "8MB";       
-        case ARENA_CAPACITY_16MB:      return "16MB";      
-        case ARENA_CAPACITY_32MB:      return "32MB";      
-        case ARENA_CAPACITY_64MB:      return "64MB";      
-        case ARENA_CAPACITY_128MB:     return "128MB";     
-        case ARENA_CAPACITY_256MB:     return "256MB";     
-        case ARENA_CAPACITY_512MB:     return "512MB";     
-        case ARENA_CAPACITY_1GB:       return "1GB";       
+        case ARENA_CAPACITY_1KB:       return "1KB";
+        case ARENA_CAPACITY_2KB:       return "2KB";
+        case ARENA_CAPACITY_4KB:       return "4KB";
+        case ARENA_CAPACITY_8KB:       return "8KB";
+        case ARENA_CAPACITY_16KB:      return "16KB";
+        case ARENA_CAPACITY_32KB:      return "32KB";
+        case ARENA_CAPACITY_64KB:      return "64KB";
+        case ARENA_CAPACITY_128KB:     return "128KB";
+        case ARENA_CAPACITY_256KB:     return "256KB";
+        case ARENA_CAPACITY_512KB:     return "512KB";
+        case ARENA_CAPACITY_1MB:       return "1MB";
+        case ARENA_CAPACITY_2MB:       return "2MB";
+        case ARENA_CAPACITY_4MB:       return "4MB";
+        case ARENA_CAPACITY_8MB:       return "8MB";
+        case ARENA_CAPACITY_16MB:      return "16MB";
+        case ARENA_CAPACITY_32MB:      return "32MB";
+        case ARENA_CAPACITY_64MB:      return "64MB";
+        case ARENA_CAPACITY_128MB:     return "128MB";
+        case ARENA_CAPACITY_256MB:     return "256MB";
+        case ARENA_CAPACITY_512MB:     return "512MB";
+        case ARENA_CAPACITY_1GB:       return "1GB";
         case ARENA_CAPACITY_MAX:       return "8GB"; 
-        default:                       return "Custom";   
+        default:                       return "Custom";
     }
 }
 
@@ -293,7 +297,6 @@ static inline void arena_destroy(Arena *arena);
 static inline ArenaMemory arena_alloc(Arena *arena, arena_size_t size, size_t alignment);
 static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alignment);
 static inline ArenaMemory arena_alloc_zero(Arena *arena, arena_size_t size, size_t alignment);
-static inline void *arena_alloc_zero_raw(Arena *arena, arena_size_t size, size_t alignment);
 static inline bool arena_reset(Arena *arena);
 static inline bool arena_grow(Arena *arena, arena_size_t grow_size);
 static inline void *arena_memory_resolve(const Arena *arena, ArenaMemory *memory);
@@ -683,7 +686,6 @@ static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alig
         return NULL;
     }
     // if alignment is forced then every address should be aligned to CPU cache line size
-    // TODO cache line is not always 64 bits, ARENA_ALIGN_CACHELINE should be optional
     if (arena->flags & ARENA_FLAG_ENFORCE_ALIGNMENT)
         alignment = ARENA_ALIGN_CACHELINE;
 
@@ -848,6 +850,7 @@ static inline bool arena_reset(Arena *arena)
 
     if (arena->growth_contract == ARENA_GROWTH_CONTRACT_CHUNKY) {
         for (ArenaChunk *c = arena->head_chunk; NULL != c; c = c->next ) {
+            _ARENA_PREFETCH(c->next);
             ARENA_LOG("Chunk resetted at: %p", c);
             c->offset = 0;
         }
@@ -1019,6 +1022,7 @@ static inline bool arena_restore(Arena *arena, ArenaMark mark, bool poison_memor
     }
 
     for (ArenaChunk *c = mark.chunk; c != NULL; c = c->next) {
+        _ARENA_PREFETCH(c->next);
         c->offset = 0;
     }
 
