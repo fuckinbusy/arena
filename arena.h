@@ -331,6 +331,11 @@ _ARENA_FORCE_INLINE arena_size_t _arena_sadd(arena_size_t a, arena_size_t b, are
     return (a > (max - b)) ? max : (a + b);
 }
 
+_ARENA_FORCE_INLINE arena_size_t _arena_ssub(arena_size_t a, arena_size_t b, arena_size_t min)
+{
+    return (a < (b + min)) ? min : (a - b);
+}
+
 _ARENA_FORCE_INLINE arena_size_t _arena_smul(arena_size_t a, arena_size_t b, arena_size_t max)
 {
     return (a > (max / b)) ? max : (a * b);
@@ -399,6 +404,11 @@ _ARENA_FORCE_INLINE size_t _arena_calc_chunk_real_size(arena_size_t capacity)
     return _arena_downcast_size(_arena_sadd(sizeof(ArenaChunk), capacity, ARENA_SIZE_MAX), NULL);
 }
 
+_ARENA_FORCE_INLINE arena_size_t _arena_calc_chunk_capacity(size_t chunk_real_size)
+{
+    return (arena_size_t)(chunk_real_size - sizeof(ArenaChunk));
+}
+
 static inline void *_arena_alloc_chunk(size_t chunk_capacity, uint32_t alloc_type)
 {
     /*
@@ -413,7 +423,7 @@ static inline void *_arena_alloc_chunk(size_t chunk_capacity, uint32_t alloc_typ
     size_t chunk_real_size = _arena_calc_chunk_real_size(chunk_capacity);
 
     // to make actual assertion that actual chunk capacity >= chunk_capacity
-    if ((chunk_real_size - sizeof(ArenaChunk)) < chunk_capacity) {
+    if (_arena_calc_chunk_capacity(chunk_real_size) < chunk_capacity) {
         ARENA_LOG("Critical error while allocating new chunk: allocation capacity is less than required capacity.");
         return NULL;
     }
@@ -448,8 +458,7 @@ static inline void *_arena_alloc_chunk(size_t chunk_capacity, uint32_t alloc_typ
 
     chunk->next     = NULL;
     chunk->offset   = 0;
-    // if there was an overflow, then we need to calculate real capacity
-    chunk->capacity = chunk_real_size - sizeof(ArenaChunk);
+    chunk->capacity = _arena_calc_chunk_capacity(chunk_real_size);
 
     ARENA_LOG("Chunk: base:%p capacity:%d", chunk->base, chunk->capacity);
 
@@ -847,7 +856,7 @@ static inline bool arena_reset(Arena *arena)
         arena->epoch++;
         goto reset_success;
     }
-    
+
 reset_failure:
     ARENA_LOG("Arena reset failed");
     return false;
@@ -879,12 +888,12 @@ static inline void *arena_memset(void *dst, int value, size_t size)
     int word = 0;
     uint64_t pattern64 = (uint8_t)value;
     
-    if (size >= 0x10000) {
+    if (size >= 0x4000) {
         word = 8;
         pattern64 |= (pattern64 << 8);
         pattern64 |= (pattern64 << 16);
         pattern64 |= (pattern64 << 32);
-    } else if (size >= 0x4000) {
+    } else if (size >= 0x1000) {
         word = 4;
         pattern64 |= (pattern64 << 8);
         pattern64 |= (pattern64 << 16);
