@@ -811,19 +811,15 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
     return true;
 }
 
-// TODO change invariant
 static inline void *arena_memory_resolve(Arena *arena, ArenaMemory *memory)
 {
-    if (!arena || !memory || !arena->last_chunk || memory->epoch != arena->epoch) return NULL;    
+    if (!arena || !memory || !arena->head_chunk || memory->epoch != arena->epoch) return NULL;    
 
-    if (arena->growth_contract == ARENA_GROWTH_CONTRACT_CHUNKY) {
-        memory->data = (void*)((arena_ptr_t)memory->chunk->base + memory->offset);
-    }
-
-    else if (arena->growth_contract == ARENA_GROWTH_CONTRACT_REALLOC) {
+    if (arena->growth_contract == ARENA_GROWTH_CONTRACT_REALLOC) {
         memory->chunk = arena->head_chunk;
-        memory->data = (void*)((arena_ptr_t)memory->chunk->base + memory->offset);
     }
+
+    memory->data = (void*)((arena_ptr_t)memory->chunk->base + memory->offset);
     
     return memory->data;
 }
@@ -851,6 +847,7 @@ static inline bool arena_reset(Arena *arena)
         arena->epoch++;
         goto reset_success;
     }
+    
 reset_failure:
     ARENA_LOG("Arena reset failed");
     return false;
