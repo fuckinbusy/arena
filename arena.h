@@ -94,6 +94,7 @@ typedef uintptr_t arena_ptr_t;
 
 #define _ARENA_POISON_ALLOC         0xCD   // arena memory poisoning value after allocating memory from arena
 #define _ARENA_POISON_RESET         0xDD   // arena memory poisoning value after resetting arena
+
 #define ARENA_PAGE_ALIGN_THRESHOLD 0x2000  // used to identify when to switch to platform specific allocation 
 #define ARENA_PAGE_DEFAULT_SIZE    0x1000  // for libc universal platform 
 
@@ -175,65 +176,38 @@ typedef enum ArenaAlignment : uint32_t {
     ARENA_ALIGN_SIMD_MMX       = 8,
     ARENA_ALIGN_SIMD_SSE       = 16,
     ARENA_ALIGN_SIMD_AVX       = 32,
-    ARENA_ALIGN_SIMD_CACHELINE = 64, // x86/ARM
     ARENA_ALIGN_SIMD_AVX512    = 512,
 
     // Cache line sized alignment
     ARENA_ALIGN_CACHELINE = ARENA_CACHELINE_SIZE,
 } ArenaAlignment;
 
-static inline const char *arena_capacity_str(size_t capacity)
-{
-    switch (capacity) {
-        case ARENA_CAPACITY_1KB:       return "1KB";
-        case ARENA_CAPACITY_2KB:       return "2KB";
-        case ARENA_CAPACITY_4KB:       return "4KB";
-        case ARENA_CAPACITY_8KB:       return "8KB";
-        case ARENA_CAPACITY_16KB:      return "16KB";
-        case ARENA_CAPACITY_32KB:      return "32KB";
-        case ARENA_CAPACITY_64KB:      return "64KB";
-        case ARENA_CAPACITY_128KB:     return "128KB";
-        case ARENA_CAPACITY_256KB:     return "256KB";
-        case ARENA_CAPACITY_512KB:     return "512KB";
-        case ARENA_CAPACITY_1MB:       return "1MB";
-        case ARENA_CAPACITY_2MB:       return "2MB";
-        case ARENA_CAPACITY_4MB:       return "4MB";
-        case ARENA_CAPACITY_8MB:       return "8MB";
-        case ARENA_CAPACITY_16MB:      return "16MB";
-        case ARENA_CAPACITY_32MB:      return "32MB";
-        case ARENA_CAPACITY_64MB:      return "64MB";
-        case ARENA_CAPACITY_128MB:     return "128MB";
-        case ARENA_CAPACITY_256MB:     return "256MB";
-        case ARENA_CAPACITY_512MB:     return "512MB";
-        case ARENA_CAPACITY_1GB:       return "1GB";
-        case ARENA_CAPACITY_MAX:       return "8GB"; 
-        default:                       return "Custom";
-    }
-}
-
-static inline const char *arena_platform_str()
-{
-    switch (ARENA_PLATFORM) {
-        case _ARENA_PLATFORM_WIN32: return "WIN32";
-        case _ARENA_PLATFORM_WIN64: return "WIN64";
-        case _ARENA_PLATFORM_UNIX:  return "UNIX";
-        case _ARENA_PLATFORM_LIBC:  return "LIBC";
-        default:                    return "UNKNOWN";
-    }
-}
-
-typedef enum ArenaFlag {
+typedef enum ArenaFlag : uint16_t {
     ARENA_FLAG_NONE              = 0,
     ARENA_FLAG_FILLZEROES        = 1,
     ARENA_FLAG_DEBUG             = 1 << 1,
     ARENA_FLAG_ENFORCE_ALIGNMENT = 1 << 2,
     ARENA_FLAG_RESET_AFTER_GROW  = 1 << 3,
+    ARENA_FLAG_FIXED_CHUNK_SIZE  = 1 << 4,
 } ArenaFlag;
 
-typedef enum ArenaError {
+typedef enum ArenaError : uint32_t {
     ARENA_ERROR_NONE = 0,
-    ARENA_ERROR_OOM,
+
+    ARENA_ERROR_INVALID_CAPACITY,
     ARENA_ERROR_INVALID_ALIGNMENT,
+
+    ARENA_ERROR_OOM,
+    ARENA_ERROR_ALIGNMENT_TOO_LARGE,
+    ARENA_ERROR_SIZE_ZERO,
+    ARENA_ERROR_SIZE_OVERFLOW,
+
+    ARENA_ERROR_GROWTH_FORBIDDEN,
+    ARENA_ERROR_MAX_CAPACITY_REACHED,
+    ARENA_ERROR_REALLOC_FAILED,
+    ARENA_ERROR_CHUNK_ALLOC_FAILED,
+
+    ARENA_ERROR_EPOCH_MISMATCH,
 } ArenaError;
 
 typedef struct ArenaConfig {
@@ -248,7 +222,7 @@ typedef struct ArenaDebugInfo {
     uint8_t      *end;              // address to the end of the last allocated block of memory
     arena_size_t bytes_lost;        // bytes loss due to alignment
     size_t       total_allocations; // obviously number of total allocations
-} ArenaDebugInfo;
+} ArenaDebugInfo;   
 
 typedef struct ArenaChunk {
     struct ArenaChunk  *next;
@@ -273,6 +247,7 @@ typedef struct ArenaMark {
 } ArenaMark;
 
 typedef struct Arena {
+    // metadata
     arena_size_t        reserved;        // memory reserved for user data (does not include chunk metadata and used for OOM check)
     arena_size_t        max_capacity;    // max arena capacity (machine dependent), it shows how big this arena can be if it can grow
     arena_size_t        growth_factor;   // how fast grows (depends on contract)
@@ -281,10 +256,10 @@ typedef struct Arena {
     ArenaError          error;           // error flag
     uint32_t            alloc_type;      // reflects how arena memory was originally allocated and must not change during arena lifetime
     arena_size_t        epoch;
-
+    // chunks
     ArenaChunk          *head_chunk;
     ArenaChunk          *last_chunk;
-
+    //debug
     ArenaDebugInfo      debug;
 } Arena;
 
@@ -298,10 +273,14 @@ static inline ArenaMemory arena_alloc(Arena *arena, arena_size_t size, size_t al
 static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alignment);
 static inline ArenaMemory arena_alloc_zero(Arena *arena, arena_size_t size, size_t alignment);
 static inline bool arena_reset(Arena *arena);
-static inline bool arena_grow(Arena *arena, arena_size_t grow_size);
-static inline void *arena_memory_resolve(const Arena *arena, ArenaMemory *memory);
+static inline bool arena_grow(Arena *arena, arena_size_t min_required_size);
+static inline void *arena_memory_resolve(Arena *arena, ArenaMemory *memory);
 static inline ArenaMark arena_mark(const Arena *arena);
 static inline bool arena_restore(Arena *arena, ArenaMark mark, bool poison_memory);
+
+static inline const char *arena_capacity_str(size_t capacity);
+static inline const char *arena_platform_str();
+static inline const char *arena_get_error(const Arena *arena);
 
 _ARENA_FORCE_INLINE long long arena_abs(long long value);
 
@@ -406,6 +385,65 @@ _ARENA_FORCE_INLINE size_t _arena_calc_chunk_real_size(arena_size_t capacity)
 _ARENA_FORCE_INLINE arena_size_t _arena_calc_chunk_capacity(size_t chunk_real_size)
 {
     return (arena_size_t)(chunk_real_size - sizeof(ArenaChunk));
+}
+
+static inline const char *arena_capacity_str(size_t capacity)
+{
+    switch (capacity) {
+        case ARENA_CAPACITY_1KB:       return "1KB";
+        case ARENA_CAPACITY_2KB:       return "2KB";
+        case ARENA_CAPACITY_4KB:       return "4KB";
+        case ARENA_CAPACITY_8KB:       return "8KB";
+        case ARENA_CAPACITY_16KB:      return "16KB";
+        case ARENA_CAPACITY_32KB:      return "32KB";
+        case ARENA_CAPACITY_64KB:      return "64KB";
+        case ARENA_CAPACITY_128KB:     return "128KB";
+        case ARENA_CAPACITY_256KB:     return "256KB";
+        case ARENA_CAPACITY_512KB:     return "512KB";
+        case ARENA_CAPACITY_1MB:       return "1MB";
+        case ARENA_CAPACITY_2MB:       return "2MB";
+        case ARENA_CAPACITY_4MB:       return "4MB";
+        case ARENA_CAPACITY_8MB:       return "8MB";
+        case ARENA_CAPACITY_16MB:      return "16MB";
+        case ARENA_CAPACITY_32MB:      return "32MB";
+        case ARENA_CAPACITY_64MB:      return "64MB";
+        case ARENA_CAPACITY_128MB:     return "128MB";
+        case ARENA_CAPACITY_256MB:     return "256MB";
+        case ARENA_CAPACITY_512MB:     return "512MB";
+        case ARENA_CAPACITY_1GB:       return "1GB";
+        case ARENA_CAPACITY_MAX:       return "8GB"; 
+        default:                       return "Custom";
+    }
+}
+
+static inline const char *arena_platform_str()
+{
+    switch (ARENA_PLATFORM) {
+        case _ARENA_PLATFORM_WIN32: return "WIN32";
+        case _ARENA_PLATFORM_WIN64: return "WIN64";
+        case _ARENA_PLATFORM_UNIX:  return "UNIX";
+        case _ARENA_PLATFORM_LIBC:  return "LIBC";
+        default:                    return "UNKNOWN";
+    }
+}
+
+static inline const char *arena_get_error(const Arena *arena)
+{
+    switch (arena->error) {
+        case ARENA_ERROR_NONE:                 return "No errors.";
+        case ARENA_ERROR_ALIGNMENT_TOO_LARGE:  return "Alignment value is too big.";
+        case ARENA_ERROR_CHUNK_ALLOC_FAILED:   return "Failed to allocate memory chunk.";
+        case ARENA_ERROR_EPOCH_MISMATCH:       return "Epoch mismatch.";
+        case ARENA_ERROR_GROWTH_FORBIDDEN:     return "Growth forbidden. Use another growth contract.";
+        case ARENA_ERROR_INVALID_ALIGNMENT:    return "Invalid alignment value.";
+        case ARENA_ERROR_INVALID_CAPACITY:     return "Invalid capacity value.";
+        case ARENA_ERROR_REALLOC_FAILED:       return "Failed to reallocate memory chunk.";
+        case ARENA_ERROR_MAX_CAPACITY_REACHED: return "Growth forbidden. Max capacity reached.";
+        case ARENA_ERROR_OOM:                  return "Out of memory.";
+        case ARENA_ERROR_SIZE_OVERFLOW:        return "Size overflow.";
+        case ARENA_ERROR_SIZE_ZERO:            return "Zero size.";
+        default:                               return "Unknown";
+    }
 }
 
 static inline void *_arena_alloc_chunk(size_t chunk_capacity, uint32_t alloc_type)
@@ -517,7 +555,7 @@ static inline ArenaChunk *_arena_realloc(Arena* arena, size_t required_chunk_cap
     }
 
     new_chunk->capacity = realloc_size - sizeof(ArenaChunk);
-    arena->reserved     = new_chunk->capacity; 
+    arena->reserved     = new_chunk->capacity;
     arena->head_chunk   = new_chunk;
     arena->last_chunk   = new_chunk;
     // because for realloc contract we store capacity of only one chunk
@@ -687,13 +725,13 @@ static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alig
     arena_ptr_t  aligned_addr = 0;
     arena_size_t lost_bytes   = 0;
     arena_size_t new_offset   = 0;
-        
+    
     _arena_calc_alloc_data(arena->last_chunk, size, alignment, &addr, &aligned_addr, &new_offset, &lost_bytes);
     
+    arena_size_t alloc_size = size + lost_bytes;
     if (new_offset > arena->last_chunk->capacity) {
-        bool has_grown = arena_grow(arena, new_offset);
+        bool has_grown = arena_grow(arena, alloc_size);
         if (!has_grown) {
-            _arena_set_error(arena, ARENA_ERROR_OOM);
             ARENA_LOG(
                 "Failed to allocate `%d` bytes on arena (OOM error. Requested: "ARENA_SIZE_FMT", Reserved: "ARENA_SIZE_FMT")",
                 size + lost_bytes, size, arena->reserved
@@ -704,8 +742,8 @@ static inline void *arena_alloc_raw(Arena *arena, arena_size_t size, size_t alig
         _arena_calc_alloc_data(arena->last_chunk, size, alignment, &addr, &aligned_addr, &new_offset, &lost_bytes); 
     }
     
+    alloc_size = size + lost_bytes;
     arena->last_chunk->offset = new_offset;
-    arena_size_t alloc_size   = size + lost_bytes;
     
     ARENA_LOG(
         "Allocated `%d` bytes on arena (align = %zu, loss = %d, requested = %d)",
@@ -740,20 +778,28 @@ static inline ArenaMemory arena_alloc_zero(Arena *arena, arena_size_t size, size
     };
 }
 
-static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
+static inline bool arena_grow(Arena *arena, arena_size_t min_contiguous_size)
 {
-    if (!arena || required_capacity <= arena->last_chunk->capacity || arena->growth_contract == ARENA_GROWTH_CONTRACT_FIXED) return false;
-    if (required_capacity > arena->max_capacity) {
-        _arena_set_error(arena, ARENA_ERROR_OOM);
+    if (!arena || min_contiguous_size < (arena->last_chunk->capacity - arena->last_chunk->offset)) return false;
+
+    if (arena->growth_contract == ARENA_GROWTH_CONTRACT_FIXED) {
+        _arena_set_error(arena, ARENA_ERROR_GROWTH_FORBIDDEN);
+        return false;
+    }
+
+    if (min_contiguous_size > arena->max_capacity) {
+        _arena_set_error(arena, ARENA_ERROR_MAX_CAPACITY_REACHED);
         return false;
     }
     
-    switch (arena->growth_contract) {
-        case ARENA_GROWTH_CONTRACT_FIXED: return false;
-        
+    switch (arena->growth_contract) {        
         case ARENA_GROWTH_CONTRACT_REALLOC: {
+            arena_size_t required_capacity = min_contiguous_size + arena->last_chunk->offset;
             ArenaChunk *new_chunk = _arena_realloc(arena, required_capacity);
-            if (!new_chunk) return false;
+            if (!new_chunk) {
+                _arena_set_error(arena, ARENA_ERROR_REALLOC_FAILED);
+                return false;
+            }
             
             arena->last_chunk = new_chunk;
 
@@ -774,10 +820,17 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
         } break;
 
         case ARENA_GROWTH_CONTRACT_CHUNKY: {
+            arena_size_t required_capacity = min_contiguous_size;
             arena_size_t chunk_capacity = arena->growth_factor;
-            if (chunk_capacity < required_capacity)
-                // add extra bytes to prevent alloc failure due to address alignment
-                chunk_capacity = _arena_align_up(required_capacity, ARENA_ALIGN_512B);
+            if (chunk_capacity < required_capacity) {
+                if (!(arena->flags & ARENA_FLAG_FIXED_CHUNK_SIZE)) {
+                    // add extra bytes to prevent alloc failure due to address alignment
+                    chunk_capacity = _arena_align_up(required_capacity, ARENA_ALIGN_512B);
+                } else {
+                    _arena_set_error(arena, ARENA_ERROR_OOM);
+                    return false;
+                }
+            }
 
             ARENA_LOG("New chunk capacity: "ARENA_SIZE_FMT, chunk_capacity);
 
@@ -788,11 +841,14 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
             }
 
             ArenaChunk *chunk = _arena_alloc_chunk(_arena_downcast_size(chunk_capacity, NULL), arena->alloc_type);
-            if (!chunk) return false;
+            if (!chunk) {
+                _arena_set_error(arena, ARENA_ERROR_CHUNK_ALLOC_FAILED);
+                return false;
+            }
 
             arena->last_chunk->next = chunk;
             arena->last_chunk = chunk;
-            arena->reserved += chunk->capacity;
+            arena->reserved += chunk->capacity; 
 
             ARENA_LOG(
                 "New chunk added at: %p\n"
@@ -818,9 +874,13 @@ static inline bool arena_grow(Arena *arena, arena_size_t required_capacity)
     return true;
 }
 
-static inline void *arena_memory_resolve(const Arena *arena, ArenaMemory *memory)
+static inline void *arena_memory_resolve(Arena *arena, ArenaMemory *memory)
 {
-    if (!arena || !memory || !arena->head_chunk || memory->epoch != arena->epoch) return NULL;    
+    if (!arena || !memory || !arena->head_chunk) return NULL;
+    if (memory->epoch != arena->epoch) {
+        _arena_set_error(arena, ARENA_ERROR_EPOCH_MISMATCH);
+        return NULL;
+    }    
 
     if (arena->growth_contract == ARENA_GROWTH_CONTRACT_REALLOC) {
         memory->chunk = arena->head_chunk;
