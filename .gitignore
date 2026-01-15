@@ -2,4 +2,6 @@ fuckin_busy/
 *.exe
 .vscode
 TODO
-benchmark_png
+presentation
+arena.wiki
+*.csv

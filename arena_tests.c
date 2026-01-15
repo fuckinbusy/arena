@@ -43,7 +43,7 @@ TEST_CREATE(test_arena_create_destroy)
 
     arena_destroy(&arena);
     ASSERT(arena.last_chunk == NULL);
-    // ASSERT(arena.commited == 0);
+    // ASSERT(arena.reserved == 0);
     
     return true;
 }
@@ -95,7 +95,7 @@ TEST_CREATE(test_arena_overflow)
 
     void *p = arena_alloc_raw(&arena, 0x4000, ARENA_ALIGN_8B);
     ASSERT(p == NULL);
-    ASSERT(arena.error == ARENA_ERROR_OOM);
+    ASSERT(arena.error == ARENA_ERROR_GROWTH_FORBIDDEN);
 
     arena_destroy(&arena);
     ASSERT(arena.last_chunk == NULL);
@@ -165,10 +165,10 @@ TEST_CREATE(test_arena_grow_chunky)
 {
     Arena arena = arena_create_ex(arena_config_create(
         ARENA_CAPACITY_1KB,
-        ARENA_CAPACITY_8KB,
+        ARENA_CAPACITY_16KB,
         ARENA_GROWTH_CONTRACT_CHUNKY,
-        ARENA_GROWTH_FACTOR_CHUNKY_2KB,
-        ARENA_FLAG_DEBUG
+        ARENA_GROWTH_FACTOR_CHUNKY_4KB,
+        ARENA_FLAG_DEBUG | ARENA_FLAG_FIXED_CHUNK_SIZE
     ));
     
     void *pa = arena_alloc_raw(&arena, 0x200, ARENA_ALIGN_4B);
@@ -183,7 +183,7 @@ TEST_CREATE(test_arena_grow_chunky)
     ASSERT(pc != NULL);
     ASSERT(arena.head_chunk->next->next != NULL); // +1 new chunk
     
-    ASSERT(arena.reserved == ARENA_CAPACITY_8KB);
+    ASSERT(arena.reserved == 9216); // 1kb + 4kb + 4kbs
 
     pc = arena_alloc_raw(&arena, 0x10F0, ARENA_ALIGN_4B);
     ASSERT(pc == NULL);    
@@ -249,7 +249,7 @@ TEST_CREATE(test_arena_error) {
     ASSERT(arena.last_chunk->offset == 0);
 
     ASSERT(arena_alloc_raw(&arena, 0x3000, 8) == NULL);
-    ASSERT(arena.error == ARENA_ERROR_OOM);
+    ASSERT(arena.error == ARENA_ERROR_GROWTH_FORBIDDEN);
 
     arena_destroy(&arena);
 
