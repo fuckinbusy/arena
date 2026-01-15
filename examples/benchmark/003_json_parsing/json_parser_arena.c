@@ -516,9 +516,9 @@ int main(void)
 
     ARENA = arena_create_ex(arena_config_create(
         ARENA_CAPACITY_8KB,
-        ARENA_CAPACITY_16MB,
+        ARENA_CAPACITY_32MB,
         ARENA_GROWTH_CONTRACT_CHUNKY,
-        ARENA_GROWTH_FACTOR_CHUNKY_2MB,
+        ARENA_GROWTH_FACTOR_CHUNKY_1MB,
         0
     ));
 
