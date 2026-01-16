@@ -46,18 +46,3 @@ int main(void)
     return 0;
 }
 ```
-
-# Benchmarks Results
-**1 Million allocations**
-<img width="1595" height="1118" alt="allocations" src="https://github.com/user-attachments/assets/c7c84e30-eacf-4935-88db-8e491b57a13f" />
-
----
-
-**Parsing heavy JSON file (10K iterations)**
-<img width="1704" height="1118" alt="parsing" src="https://github.com/user-attachments/assets/6a6ea9c0-cb2c-404a-8187-0c81ae9679d5" />
-
----
-
-**Rendering pixels on a screen (106666 pixels per frame)**
-<img width="2990" height="1638" alt="rendering" src="https://github.com/user-attachments/assets/3d353f58-e84e-4fe1-9021-35353c7600a1" />
-
