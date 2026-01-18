@@ -32,7 +32,7 @@ The library itself does not require any special building. You can simple copy-pa
 
 int main(void)
 {
-    Arena arena = arena_create(ARENA_CAPACITY_4KB);<img width="1595" height="1118" alt="allocations" src="https://github.com/user-attachments/assets/0b26a21f-d65b-4053-b3bf-db02305f9e1c" />
+    Arena arena = arena_create(ARENA_CAPACITY_4KB);
 
 
     int *values = arena_alloc_array(&arena, 100, int);
